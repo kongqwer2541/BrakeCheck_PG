@@ -1,0 +1,4 @@
+interface:
+  display_name: "Beginner Safe Coding"
+  short_description: "Work safely on BrakeCheck with beginner-friendly guardrails"
+  default_prompt: "Use beginner-safe coding practices for this BrakeCheck task."

@@ -1,0 +1,31 @@
+# Node.js
+node_modules/
+npm-debug.log*
+server/*.log
+BrakeCheck_ProjectSummary_ForAI.pdf
+
+# Environment files
+.env
+
+# Database backups and dumps
+backups/
+*.sql
+!server/src/database/**/*.sql
+
+# Runtime storage
+storage/uploads/**
+storage/exports/**
+storage/attachments/**
+!storage/uploads/.gitkeep
+!storage/uploads/excel/.gitkeep
+!storage/exports/.gitkeep
+!storage/exports/pdf/.gitkeep
+!storage/exports/excel/.gitkeep
+!storage/attachments/.gitkeep
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Editor
+.vscode/

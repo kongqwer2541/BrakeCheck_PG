@@ -1,0 +1,17 @@
+{
+  "name": "brakecheck",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chrome-based QC record system for brake pad production",
+  "scripts": {
+    "start": "npm run start --prefix server",
+    "dev": "npm run dev --prefix server"
+  },
+  "keywords": [
+    "qc",
+    "brake",
+    "quality-control"
+  ],
+  "author": "",
+  "license": "UNLICENSED"
+}
