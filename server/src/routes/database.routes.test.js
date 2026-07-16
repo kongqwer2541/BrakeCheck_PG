@@ -66,7 +66,9 @@ describe('database routes', () => {
       assert.equal(response.body.ok, false);
       assert.match(response.body.message, /เข้าสู่ระบบ/);
       assert.equal(response.body.database, undefined);
-      assert.equal(response.body.mysqlVersion, undefined);
+      assert.equal(response.body.databaseVersion, undefined);
+      assert.equal(response.body.engine, undefined);
+      assert.equal(response.body.schemaReady, undefined);
       assert.equal(response.body.requiredTables, undefined);
     } finally {
       await new Promise((resolve) => server.close(resolve));

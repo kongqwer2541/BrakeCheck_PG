@@ -1,4 +1,4 @@
-import { db } from '../config/database.js';
+import { postgresDb } from '../config/database.js';
 import { env } from '../config/env.js';
 
 export const requiredTables = [
@@ -18,36 +18,41 @@ export const requiredTables = [
   'dimension_inspection_values'
 ];
 
-export function buildDatabaseHealthResult({ database, mysqlVersion, tableRows }) {
+export function buildDatabaseHealthResult({ database, databaseVersion, tableRows }) {
   const foundTables = tableRows.map((row) => row.TABLE_NAME || row.table_name);
   const missingTables = requiredTables.filter((tableName) => !foundTables.includes(tableName));
 
   return {
-    ok: missingTables.length === 0,
+    ok: true,
+    schemaReady: missingTables.length === 0,
+    engine: 'postgresql',
     database,
-    mysqlVersion,
+    databaseVersion,
     requiredTables,
     foundTables,
     missingTables
   };
 }
 
-export async function getDatabaseHealth() {
-  const [versionRows] = await db.execute('SELECT VERSION() AS version');
-  const tablePlaceholders = requiredTables.map(() => '?').join(', ');
-
-  const [tableRows] = await db.execute(
+export async function getDatabaseHealth(executor = postgresDb) {
+  const metadataResult = await executor.query(
+    `SELECT current_database() AS database,
+            current_setting('server_version') AS version`
+  );
+  const tableResult = await executor.query(
     `SELECT table_name
      FROM information_schema.tables
-     WHERE table_schema = ?
-       AND table_name IN (${tablePlaceholders})
+     WHERE table_schema = $1
+       AND table_type = 'BASE TABLE'
+       AND table_name = ANY($2::text[])
      ORDER BY table_name`,
-    [env.db.name, ...requiredTables]
+    ['public', requiredTables]
   );
+  const metadata = metadataResult.rows[0] || {};
 
   return buildDatabaseHealthResult({
-    database: env.db.name,
-    mysqlVersion: versionRows[0].version,
-    tableRows
+    database: metadata.database || env.db.name,
+    databaseVersion: metadata.version,
+    tableRows: tableResult.rows
   });
 }

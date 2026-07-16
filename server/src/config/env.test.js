@@ -50,6 +50,51 @@ async function readEnvJson({ corsOrigins = '' } = {}) {
   return JSON.parse(stdout);
 }
 
+async function readDatabaseEnvJson(overrides = {}) {
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '--eval',
+      "import { env } from './src/config/env.js'; console.log(JSON.stringify({ host: env.db.host, port: env.db.port, name: env.db.name, user: env.db.user }));"
+    ],
+    {
+      cwd: serverRoot,
+      env: {
+        ...process.env,
+        DB_HOST: '',
+        DB_PORT: '',
+        DB_NAME: '',
+        DB_USER: '',
+        DB_PASSWORD: '',
+        SESSION_SECRET: 'brakecheck-test-session-secret-32-characters',
+        ...overrides
+      }
+    }
+  );
+
+  return JSON.parse(stdout);
+}
+
+async function loadEnvWithOverrides(overrides) {
+  return execFileAsync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '--eval',
+      "import './src/config/env.js';"
+    ],
+    {
+      cwd: serverRoot,
+      env: {
+        ...process.env,
+        SESSION_SECRET: 'brakecheck-test-session-secret-32-characters',
+        ...overrides
+      }
+    }
+  );
+}
+
 test('env config rejects weak SESSION_SECRET values', async () => {
   const weakSecrets = [
     '',
@@ -93,4 +138,24 @@ test('env config adds configured cors origins', async () => {
     'http://192.168.1.25:3000',
     'http://192.168.10.50:3000'
   ]);
+});
+
+test('env config defaults to the local PostgreSQL database', async () => {
+  const data = await readDatabaseEnvJson();
+
+  assert.deepEqual(data, {
+    host: 'localhost',
+    port: 5432,
+    name: 'brakecheck_pg',
+    user: 'brakecheck_app'
+  });
+});
+
+test('env config rejects invalid database ports', async () => {
+  for (const dbPort of ['not-a-number', '0', '65536', '5432.5']) {
+    await assert.rejects(
+      loadEnvWithOverrides({ DB_PORT: dbPort }),
+      /DB_PORT/
+    );
+  }
 });

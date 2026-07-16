@@ -41,15 +41,25 @@ function readCorsOrigins() {
   return [...new Set([...defaultOrigins, ...configuredOrigins])];
 }
 
+function readDatabasePort() {
+  const port = Number(String(process.env.DB_PORT || '5432').trim());
+
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('DB_PORT must be an integer between 1 and 65535.');
+  }
+
+  return port;
+}
+
 export const env = {
   appName: process.env.APP_NAME || 'BrakeCheck',
   appPort: Number(process.env.APP_PORT || 3000),
   corsOrigins: readCorsOrigins(),
   db: {
     host: process.env.DB_HOST || 'localhost',
-    port: Number(process.env.DB_PORT || 3306),
-    name: process.env.DB_NAME || 'brakecheck',
-    user: process.env.DB_USER || 'root',
+    port: readDatabasePort(),
+    name: process.env.DB_NAME || 'brakecheck_pg',
+    user: process.env.DB_USER || 'brakecheck_app',
     password: process.env.DB_PASSWORD || ''
   },
   sessionSecret: readSessionSecret()
