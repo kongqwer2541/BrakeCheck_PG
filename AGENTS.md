@@ -2,14 +2,18 @@
 
 ## Project Summary
 
-BrakeCheck is a Chrome-based web app for QC staff in a brake pad factory. It replaces paper quality records with a local Windows system using:
+BrakeCheck_PG is the PostgreSQL migration workspace for BrakeCheck, a Chrome-based web app for QC staff in a brake pad factory. It keeps the same local Windows workflow while moving the database target from MySQL to PostgreSQL 17.
 
 - Frontend: HTML, CSS, JavaScript
 - Backend: Node.js, Express
-- Database: MySQL
+- Target database: PostgreSQL 17
+- Source baseline: BrakeCheck MySQL version
+- Legacy backup/reference project: `C:\Users\KONG\Documents\BrakeCheck`
 - Tools: Git, GitHub, VS Code, Chrome
 
 Keep the system low-cost, local-first, beginner-readable, secure, and maintainable.
+
+Treat MySQL files and docs in this repo as source/reference until an approved PostgreSQL phase replaces them. Do not edit or connect to the original MySQL project/database unless the user explicitly approves.
 
 ## How To Work With The User
 
@@ -156,7 +160,7 @@ If a new dependency is proposed, explain what it does, why it is needed, license
 - Do not introduce paid hosting, paid databases, cloud storage, or external services without approval.
 - Do not change production deployment behavior during feature work unless the task is specifically about deployment.
 - Before deployment-related changes, explain what machine, network, database, and environment file are affected.
-- For factory use, prefer simple Windows/Chrome/MySQL workflows that a beginner can maintain.
+- For factory use, prefer simple Windows/Chrome/PostgreSQL workflows that a beginner can maintain.
 
 ## Beginner Support Requirements
 
@@ -213,9 +217,9 @@ Before a new step:
 
 ```bash
 git status
-git checkout master
-git pull
-git checkout -b codex/step-name
+git switch main
+git pull --ff-only
+git switch -c codex/step-name
 ```
 
 During work:
