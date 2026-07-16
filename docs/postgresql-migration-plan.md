@@ -675,7 +675,7 @@ Rollback ที่เสนอ:
 | เงื่อนไขผ่าน | เอกสาร/setup สอดคล้อง PostgreSQL |
 | Rollback | revert docs/config example |
 | Cost/License | ไม่มี |
-| Approval gate | ต้องอนุมัติก่อนแก้ |
+| Approval gate | ผู้ใช้อนุมัติให้เริ่ม Phase 1 แล้ว |
 
 ### Phase 2: เสนอและติดตั้ง `pg`
 

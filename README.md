@@ -1,16 +1,19 @@
-# BrakeCheck
+# BrakeCheck_PG
 
-BrakeCheck คือ Web Application สำหรับเจ้าหน้าที่ QC โรงงานผลิตผ้าเบรกรถยนต์และรถบรรทุก ใช้บันทึก ตรวจสอบ และติดตามข้อมูลคุณภาพแทนเอกสารกระดาษ
+BrakeCheck_PG คือ workspace สำหรับย้ายระบบ BrakeCheck จาก MySQL ไป PostgreSQL 17 โดยยังคงเป้าหมายเดิมคือให้เจ้าหน้าที่ QC โรงงานผลิตผ้าเบรกรถยนต์และรถบรรทุกใช้บันทึก ตรวจสอบ และติดตามข้อมูลคุณภาพแทนเอกสารกระดาษ
 
-ระบบเปิดใช้งานผ่าน Chrome และออกแบบให้ใช้เครื่องมือฟรี ไม่มีค่าใช้จ่ายรายเดือน
+ระบบยังออกแบบให้เปิดใช้งานผ่าน Chrome ใช้เครื่องมือฟรี ไม่มีค่าใช้จ่ายรายเดือน และทำงานแบบ local-first บน Windows
 
-สถานะปัจจุบัน: ฟังก์ชันหลักของระบบพัฒนาครบตามแผนถึง Step 15: Results แล้ว โดยหน้า Results ใช้เปิดดูงานที่จบแล้วแบบ read-only
+สถานะปัจจุบัน: repo นี้เป็น PostgreSQL migration workspace ยังไม่ใช่ระบบ production ที่ย้ายเสร็จแล้ว โค้ดจำนวนมากยังเป็นฐานเดิมจาก BrakeCheck MySQL version และจะค่อย ๆ เปลี่ยนตาม `docs/postgresql-migration-plan.md`
+
+โปรเจกต์ MySQL เดิมที่ `C:\Users\KONG\Documents\BrakeCheck` ต้องเก็บไว้เป็นระบบสำรอง/แหล่งอ้างอิง และห้ามแก้หรือเชื่อมต่อฐานข้อมูลเดิมโดยไม่ได้อนุมัติ
 
 ## Tech Stack
 
 - Frontend: HTML, CSS, JavaScript
 - Backend: Node.js, Express
-- Database: MySQL
+- Target Database: PostgreSQL 17
+- Source baseline: BrakeCheck MySQL version
 - Tools: VS Code, Git, GitHub, Chrome
 
 ## โครงสร้างโปรเจกต์
@@ -32,6 +35,7 @@ README นี้เป็นสารบัญสั้นของโปรเ�
 
 | งานที่ต้องทำ | อ่านไฟล์หลัก |
 | --- | --- |
+| ดูแผนย้ายจาก MySQL ไป PostgreSQL | `docs/postgresql-migration-plan.md` |
 | เริ่มเปิดระบบบนเครื่อง local ครั้งแรก | `docs/beginner-start-guide.md` |
 | เปิด server, ตรวจระบบ, backup ด้วยปุ่มกด Windows | `docs/windows-button-guide.md` |
 | Backup, Restore, ซ้อม Restore หรือกู้ข้อมูล | `docs/backup-restore-guide.md` |
@@ -47,6 +51,7 @@ README นี้เป็นสารบัญสั้นของโปรเ�
 
 ## สิ่งที่มือใหม่ควรรู้ก่อนเริ่ม
 
+- Repo นี้ยังอยู่ระหว่างย้ายฐานข้อมูล ห้ามใช้กับฐานข้อมูลจริงจนกว่า phase migration/test จะผ่านและได้รับอนุมัติ
 - ถ้าไม่อยากพิมพ์คำสั่งเอง ให้เริ่มจาก `docs/windows-button-guide.md`
 - ถ้าจะ backup ด้วยปุ่มกด ให้ใช้ `scripts/backup-system.bat` เพื่อเก็บทั้ง database และไฟล์แนบ
 - ถ้าจะตั้ง backup อัตโนมัติ ให้เริ่มจาก `docs/auto-backup-guide.md` และใช้แนวทาง full-system backup เป็นหลัก
