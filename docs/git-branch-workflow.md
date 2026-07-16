@@ -73,6 +73,95 @@ git status
 - ระบบตรวจ QC, Approved, Export
 - bug ที่กระทบหลายหน้า
 
+## สถานะล่าสุด
+
+งานที่ทำเสร็จและ Merge แล้ว:
+
+- Step 1: โครงสร้างโปรเจกต์
+- Step 2: MySQL database และตารางเริ่มต้น
+- Step 3: Backend health และ Database health
+- Step 4: Login, Session, Change Password, User Management
+- Step 5: Layout หลัก, Sidebar, Dashboard โครงแรก
+- Step 6.1: Backend อ่าน Excel และ Preview
+- Step 6.2: Save Excel to Database
+- Step 6.3: Dashboard ดึงข้อมูลจริง
+- Step 6.4: หน้า Import Excel, Preview, Confirm Save
+- Step 6.4.1: จัดการ Session หมดอายุจาก API
+- Step 6.4.2: App helpers และ UI cleanup
+- Step 6.5: Manual Input Lot
+- Step 6.6: Edit / Void Lot พร้อม Audit
+- Step 6.7: ประวัติ Lot, Import, Audit
+- Step 7: Barcode Scan / Lot Lookup
+- Step 8.1: Lot Inspection Shell
+- Step 8.2: Database และ API ฟอร์มตรวจมิติ
+- Step 8.2.1-8.2.9: คู่มือมือใหม่, backup/restore, Windows helper, env example, deployment guide, documentation safety review
+- Step 8.3: UI ฟอร์มตรวจมิติ
+- Step 8.4: ตารางค่าตรวจ, default config, เงื่อนไขช่อง `-`, validation ตาม form config, note การตรวจ และจำรหัสเครื่องมือบางช่อง
+- Step 8.5: Permission, Status และ Final Save Flow
+- Step 8.6: Dimension Inspection Final QA & Cleanup
+- Fix: แก้ mapping `ขนาดรูเจาะ` และ `ขนาดรูคว้าน`
+- Fix: แก้ Database health ให้ตรวจ `lot_audit_logs` ได้ถูกต้อง
+- Step 9: Packing Inspection Form
+- Step 9.1: Final QA, UX cleanup และ Handoff Summary เตรียมเริ่ม Step 10
+- Step 10.1: คิว `ตรวจและอนุมัติ` และ Approved Workflow
+- Step 10.1.1: หลักฐานผู้อนุมัติ/ผู้รับทราบ NG
+- Step 10.2: ไฟล์แนบผูกกับ Lot
+- Step 10 Docs: Handoff Summary และ workflow หลัง merge
+- Step 11.1: Export Excel รายงาน Lot แบบเอกสารอ่าน/แนบงาน
+- Step 11.2: Export PDF รายงาน Lot พร้อม layout อ่านง่ายและตรวจฟอนต์ไทย
+- Step 12.1: System Settings Foundation เปิดเมนูตั้งค่าระบบ, เพิ่ม `rule_key`, audit log และ seed `hole_inspection`
+- Step 12.2: Inspection Topic Management เพิ่ม/ปิดหัวข้อ, แก้ลำดับ/หมายเหตุ, ซ่อน inactive, audit และ block draft
+- Step 12.3: Sampling Rules + Instrument Prefix แก้จำนวนสุ่มตรวจทั้งชุดและ prefix เครื่องมือวัด 5 ช่อง
+- Step 13: Inspection Work Queue Pages
+- Step 14.1: Export Dimension Backend Preview สำหรับกรองรุ่น/วันที่/หัวข้อ และ preview Lot ที่ export ได้
+- Step 14.2: Export Dimension Excel API สำหรับ export `.xlsx` ด้วย `raw_data`, `skipped_values`, `summary`, `metadata`
+- Step 14.3: Export Data UI สำหรับ preview, เลือกหัวข้อ, เลือกหลาย Lot และดาวน์โหลด Excel
+- Step 15: Results สำหรับเปิดดูงานที่ Approved แล้ว และงาน NG ที่รับทราบแล้วแบบ read-only ทุก role เข้าถึงได้
+
+สถานะปิดงาน:
+- แผนหลักของโปรแกรมจบที่ Step 15 แล้ว
+- ถ้าจะเพิ่ม export/print จาก Results, UI cleanup หรือฟีเจอร์ใหม่ ให้เปิด branch/scope ใหม่
+- ก่อน commit/push/PR ของงานเอกสารหรือฟีเจอร์ใหม่ ให้ตรวจ `git status`, diff และ test ที่เกี่ยวข้องเสมอ
+
+## ปิดงาน Step 15 อย่างปลอดภัย
+
+สถานะล่าสุด:
+
+- Step 15 เป็น Step สุดท้ายของแผนหลัก และปิดงานแล้ว
+- งาน Step 15 เดิมทำงานบน branch `codex/step-15-results`
+- เพิ่มหน้าเมนู `Results` แทนเมนูเดิม `ค้นหาตามรุ่น`
+- หน้า Results ใช้สำหรับเปิดดูงานที่จบแล้วแบบ read-only เท่านั้น
+- รองรับแท็บ `Approved` และ `รับทราบ NG`
+- ทุก role เข้าได้: `head`, `assistant`, `officer`
+- ค้นหาได้จาก Lot, Lot Pack, Lot ผลิต, รุ่น/รายละเอียด และกรองวันที่ผลิตได้
+- มีปุ่มย้อนหลัง 1 วัน, ย้อนหลัง 3 วัน, โหมดวันที่ทั้งหมด และปุ่มไปวันล่าสุด
+- เปิดดูใบตรวจเดิมด้วยการคลิก/แตะซ้ำแถวเดิมในเวลาสั้น ๆ เพื่อรองรับแท็บเล็ต
+- หน้าใบตรวจที่เปิดจาก Results ไม่มีปุ่มอนุมัติ, ส่งกลับ, รับทราบ NG, บันทึก, upload/delete หรือแก้ไขข้อมูล
+- Step 15 ไม่มี export/print เพราะใช้เปิดดูรายละเอียดการตรวจสอบเท่านั้น
+- Step 15 ไม่แก้ schema/database ไม่มี migration ไม่มี bulk data write และไม่มี dependency ใหม่
+
+Final QA ที่ใช้ปิดงาน Step 15:
+
+```powershell
+node --check server/src/services/results.service.js
+node --check client/src/pages/results.page.js
+node --check client/src/app.js
+node --check client/src/pages/lot-inspection.page.js
+node --test server/src/services/results.service.test.js
+node --test client/src/pages/results.page.test.mjs
+node --test client/src/app.results-readonly.test.mjs
+node --test client/src/pages/lot-inspection.page.test.mjs
+git diff --check
+```
+
+ข้อควรระวังหลัง Step 15:
+
+- ห้ามเปลี่ยน Results ให้เป็นหน้าแก้ไขหรือหน้าอนุมัติ
+- ห้ามเพิ่มปุ่มอนุมัติ, ส่งกลับ, รับทราบ NG, บันทึก, upload/delete หรือแก้ไขใน Results/read-only detail
+- ห้ามเปลี่ยน workflow อนุมัติเดิมจาก Step 10
+- ถ้าจะเพิ่ม export/print ให้เปิด branch/scope ใหม่
+- ถ้าภายหลังมี migration, bulk operation หรือ script เขียนข้อมูลจริง ต้อง backup database ก่อน
+
 
 ## คอลัมน์ Excel ที่ใช้ในระบบ
 
