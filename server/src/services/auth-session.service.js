@@ -1,4 +1,4 @@
-import { db } from '../config/database.js';
+import { postgresDb } from '../config/database.js';
 
 export const authSessionRetentionDays = 180;
 
@@ -9,9 +9,9 @@ function sessionExpiredError() {
 }
 
 export async function createAuthSession({ userId, tokenId, expiresAt }) {
-  await db.execute(
+  await postgresDb.query(
     `INSERT INTO auth_sessions (token_id, user_id, expires_at)
-     VALUES (?, ?, ?)`,
+     VALUES ($1, $2, $3)`,
     [tokenId, userId, expiresAt]
   );
 }
@@ -21,11 +21,11 @@ export async function assertActiveAuthSession({ userId, tokenId }) {
     throw sessionExpiredError();
   }
 
-  const [rows] = await db.execute(
+  const { rows } = await postgresDb.query(
     `SELECT id
      FROM auth_sessions
-     WHERE token_id = ?
-       AND user_id = ?
+     WHERE token_id = $1
+       AND user_id = $2
        AND revoked_at IS NULL
        AND expires_at > NOW()
      LIMIT 1`,
@@ -38,36 +38,40 @@ export async function assertActiveAuthSession({ userId, tokenId }) {
 }
 
 export async function revokeAuthSession({ userId, tokenId, reason = 'logout' }) {
-  await db.execute(
+  await postgresDb.query(
     `UPDATE auth_sessions
-     SET revoked_at = COALESCE(revoked_at, NOW()),
-         revoke_reason = COALESCE(revoke_reason, ?)
-     WHERE token_id = ?
-       AND user_id = ?`,
+     SET revoked_at = COALESCE(revoked_at, CURRENT_TIMESTAMP),
+         revoke_reason = COALESCE(revoke_reason, $1)
+     WHERE token_id = $2
+       AND user_id = $3`,
     [reason, tokenId, userId]
   );
 }
 
-export async function revokeAllUserAuthSessions(userId, reason, executor = db) {
-  await executor.execute(
+export async function revokeAllUserAuthSessions(userId, reason, executor = postgresDb) {
+  await executor.query(
     `UPDATE auth_sessions
-     SET revoked_at = NOW(),
-         revoke_reason = ?
-     WHERE user_id = ?
+     SET revoked_at = CURRENT_TIMESTAMP,
+         revoke_reason = $1
+     WHERE user_id = $2
        AND revoked_at IS NULL`,
     [reason, userId]
   );
 }
 
 export async function getAuthSessionRetentionStatus() {
-  const [rows] = await db.execute(
+  const { rows } = await postgresDb.query(
     `SELECT
        COUNT(*) AS old_session_count,
-       SUM(CASE WHEN revoked_at IS NOT NULL THEN 1 ELSE 0 END) AS revoked_count,
-       SUM(CASE WHEN revoked_at IS NULL AND expires_at <= NOW() THEN 1 ELSE 0 END) AS expired_count
+       COUNT(*) FILTER (WHERE revoked_at IS NOT NULL) AS revoked_count,
+       COUNT(*) FILTER (
+         WHERE revoked_at IS NULL AND expires_at <= CURRENT_TIMESTAMP
+       ) AS expired_count
      FROM auth_sessions
-     WHERE (revoked_at IS NOT NULL OR expires_at <= NOW())
-       AND COALESCE(revoked_at, expires_at) < DATE_SUB(NOW(), INTERVAL ${authSessionRetentionDays} DAY)`
+     WHERE (revoked_at IS NOT NULL OR expires_at <= CURRENT_TIMESTAMP)
+       AND COALESCE(revoked_at, expires_at) <
+         CURRENT_TIMESTAMP - ($1::integer * INTERVAL '1 day')`,
+    [authSessionRetentionDays]
   );
   const status = rows[0] || {};
 

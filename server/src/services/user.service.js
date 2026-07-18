@@ -1,5 +1,7 @@
-import { db } from '../config/database.js';
+import { postgresDb } from '../config/database.js';
 import { hashPassword, validateNewPassword } from '../utils/password.js';
+import { withPostgresTransaction } from '../utils/postgres-transaction.js';
+import { revokeAllUserAuthSessions } from './auth-session.service.js';
 
 const allowedRoles = ['head', 'assistant', 'officer'];
 const allowedStatuses = ['active', 'suspended'];
@@ -75,21 +77,21 @@ function validateRequiredUserFields({ fullName, position }) {
   }
 }
 
-async function recordUserAudit({ actorUserId, targetUserId, action, detail }) {
-  await db.execute(
+async function recordUserAudit({ actorUserId, targetUserId, action, detail }, executor = postgresDb) {
+  await executor.query(
     `INSERT INTO user_audit_logs (
       actor_user_id,
       target_user_id,
       action,
       detail
     )
-    VALUES (?, ?, ?, ?)`,
+    VALUES ($1, $2, $3, $4)`,
     [actorUserId || null, targetUserId || null, action, detail || null]
   );
 }
 
-async function findUserById(userId) {
-  const [rows] = await db.execute(
+async function findUserById(userId, executor = postgresDb) {
+  const { rows } = await executor.query(
     `SELECT
       id,
       employee_code,
@@ -103,7 +105,7 @@ async function findUserById(userId) {
       created_at,
       updated_at
      FROM users
-     WHERE id = ?
+     WHERE id = $1
      LIMIT 1`,
     [userId]
   );
@@ -112,10 +114,10 @@ async function findUserById(userId) {
 }
 
 async function findUserByEmployeeCode(employeeCode) {
-  const [rows] = await db.execute(
+  const { rows } = await postgresDb.query(
     `SELECT id
      FROM users
-     WHERE employee_code = ?
+     WHERE employee_code = $1
      LIMIT 1`,
     [employeeCode]
   );
@@ -124,7 +126,7 @@ async function findUserByEmployeeCode(employeeCode) {
 }
 
 export async function listUsers() {
-  const [rows] = await db.execute(
+  const { rows } = await postgresDb.query(
     `SELECT
       id,
       employee_code,
@@ -178,28 +180,44 @@ export async function createUser({ actorUserId, employeeCode, fullName, position
 
   const passwordHash = await hashPassword(temporaryPassword);
 
-  const [result] = await db.execute(
-    `INSERT INTO users (
-      employee_code,
-      password_hash,
-      full_name,
-      position,
-      role,
-      status,
-      must_change_password
-    )
-    VALUES (?, ?, ?, ?, ?, ?, TRUE)`,
-    [cleanedEmployeeCode, passwordHash, cleanedFullName, cleanedPosition, selectedRole, selectedStatus]
-  );
+  let newUser;
 
-  const newUser = await findUserById(result.insertId);
+  try {
+    newUser = await withPostgresTransaction(postgresDb, async (client) => {
+      const result = await client.query(
+        `INSERT INTO users (
+          employee_code,
+          password_hash,
+          full_name,
+          position,
+          role,
+          status,
+          must_change_password
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, TRUE)
+        RETURNING id`,
+        [cleanedEmployeeCode, passwordHash, cleanedFullName, cleanedPosition, selectedRole, selectedStatus]
+      );
+      const createdUser = await findUserById(result.rows[0].id, client);
 
-  await recordUserAudit({
-    actorUserId,
-    targetUserId: newUser.id,
-    action: 'create_user',
-    detail: `Created employee_code=${newUser.employee_code}, role=${newUser.role}, status=${newUser.status}`
-  });
+      await recordUserAudit({
+        actorUserId,
+        targetUserId: createdUser.id,
+        action: 'create_user',
+        detail: `Created employee_code=${createdUser.employee_code}, role=${createdUser.role}, status=${createdUser.status}`
+      }, client);
+
+      return createdUser;
+    });
+  } catch (error) {
+    if (error.code === '23505') {
+      const conflictError = new Error('รหัสพนักงานนี้มีอยู่ในระบบแล้ว');
+      conflictError.statusCode = 409;
+      throw conflictError;
+    }
+
+    throw error;
+  }
 
   return {
     ok: true,
@@ -238,23 +256,26 @@ export async function updateUser({ userId, actorUserId, fullName, position, role
     }
   }
 
-  await db.execute(
-    `UPDATE users
-     SET full_name = ?,
-         position = ?,
-         role = ?,
-         status = ?
-     WHERE id = ?`,
-    [cleanedFullName, cleanedPosition, selectedRole, selectedStatus, cleanedUserId]
-  );
+  const updatedUser = await withPostgresTransaction(postgresDb, async (client) => {
+    await client.query(
+      `UPDATE users
+       SET full_name = $1,
+           position = $2,
+           role = $3,
+           status = $4
+       WHERE id = $5`,
+      [cleanedFullName, cleanedPosition, selectedRole, selectedStatus, cleanedUserId]
+    );
+    const savedUser = await findUserById(cleanedUserId, client);
 
-  const updatedUser = await findUserById(cleanedUserId);
+    await recordUserAudit({
+      actorUserId,
+      targetUserId: savedUser.id,
+      action: 'update_user',
+      detail: `Updated employee_code=${savedUser.employee_code}, role=${savedUser.role}, status=${savedUser.status}`
+    }, client);
 
-  await recordUserAudit({
-    actorUserId,
-    targetUserId: updatedUser.id,
-    action: 'update_user',
-    detail: `Updated employee_code=${updatedUser.employee_code}, role=${updatedUser.role}, status=${updatedUser.status}`
+    return savedUser;
   });
 
   return {
@@ -282,24 +303,27 @@ export async function resetUserPassword({ userId, actorUserId, temporaryPassword
   }
 
   const passwordHash = await hashPassword(temporaryPassword);
+  const updatedUser = await withPostgresTransaction(postgresDb, async (client) => {
+    await client.query(
+      `UPDATE users
+       SET password_hash = $1,
+           must_change_password = TRUE,
+           failed_login_count = 0,
+           locked_until = NULL
+       WHERE id = $2`,
+      [passwordHash, cleanedUserId]
+    );
+    await revokeAllUserAuthSessions(cleanedUserId, 'password_reset', client);
+    const savedUser = await findUserById(cleanedUserId, client);
 
-  await db.execute(
-    `UPDATE users
-     SET password_hash = ?,
-         must_change_password = TRUE,
-         failed_login_count = 0,
-         locked_until = NULL
-     WHERE id = ?`,
-    [passwordHash, cleanedUserId]
-  );
+    await recordUserAudit({
+      actorUserId,
+      targetUserId: savedUser.id,
+      action: 'reset_password',
+      detail: `Reset password for employee_code=${savedUser.employee_code}`
+    }, client);
 
-  const updatedUser = await findUserById(cleanedUserId);
-
-  await recordUserAudit({
-    actorUserId,
-    targetUserId: updatedUser.id,
-    action: 'reset_password',
-    detail: `Reset password for employee_code=${updatedUser.employee_code}`
+    return savedUser;
   });
 
   return {

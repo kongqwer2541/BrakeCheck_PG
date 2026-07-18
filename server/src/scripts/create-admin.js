@@ -1,5 +1,5 @@
 import bcrypt from 'bcrypt';
-import { db } from '../config/database.js';
+import { postgresDb } from '../config/database.js';
 
 const adminUser = {
   employeeCode: process.env.ADMIN_EMPLOYEE_CODE || 'admin',
@@ -30,8 +30,8 @@ async function createAdmin() {
   const adminPassword = readAdminPassword();
   const passwordHash = await bcrypt.hash(adminPassword, 12);
 
-  const [existingUsers] = await db.execute(
-    'SELECT id, employee_code, role FROM users WHERE employee_code = ? LIMIT 1',
+  const { rows: existingUsers } = await postgresDb.query(
+    'SELECT id, employee_code, role FROM users WHERE employee_code = $1 LIMIT 1',
     [adminUser.employeeCode]
   );
 
@@ -42,7 +42,7 @@ async function createAdmin() {
     return;
   }
 
-  await db.execute(
+  await postgresDb.query(
     `INSERT INTO users (
       employee_code,
       password_hash,
@@ -51,7 +51,7 @@ async function createAdmin() {
       role,
       status,
       must_change_password
-    ) VALUES (?, ?, ?, ?, ?, 'active', TRUE)`,
+    ) VALUES ($1, $2, $3, $4, $5, 'active', TRUE)`,
     [
       adminUser.employeeCode,
       passwordHash,
@@ -74,5 +74,5 @@ try {
   console.error(error.message);
   process.exitCode = 1;
 } finally {
-  await db.end();
+  await postgresDb.end();
 }

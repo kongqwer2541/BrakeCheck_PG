@@ -1,8 +1,18 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { describe, test } from 'node:test';
 
+const scriptSource = await readFile(new URL('./create-admin.js', import.meta.url), 'utf8');
+
 describe('create-admin script', () => {
+  test('uses PostgreSQL queries without MySQL placeholders', () => {
+    assert.match(scriptSource, /postgresDb\.query\(/);
+    assert.match(scriptSource, /employee_code = \$1/);
+    assert.match(scriptSource, /VALUES \(\$1, \$2, \$3, \$4, \$5, 'active', TRUE\)/);
+    assert.doesNotMatch(scriptSource, /db\.execute\(|\?/);
+  });
+
   test('stops before database access when ADMIN_PASSWORD is missing', () => {
     const result = spawnSync(process.execPath, ['src/scripts/create-admin.js'], {
       cwd: new URL('../..', import.meta.url),

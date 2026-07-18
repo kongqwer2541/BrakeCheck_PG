@@ -3,7 +3,7 @@ import test from 'node:test';
 
 process.env.SESSION_SECRET = 'test_session_secret_at_least_32_chars';
 
-const { db } = await import('../config/database.js');
+const { postgresDb } = await import('../config/database.js');
 const {
   assertActiveAuthSession,
   authSessionRetentionDays,
@@ -11,24 +11,34 @@ const {
 } = await import('./auth-session.service.js');
 
 test('accepts a session that is active in the database', async (t) => {
-  const originalExecute = db.execute;
+  const originalQuery = postgresDb.query;
+  let executedSql = '';
+  let executedParams = [];
+
   t.after(() => {
-    db.execute = originalExecute;
+    postgresDb.query = originalQuery;
   });
-  db.execute = async () => [[{ id: 1 }]];
+  postgresDb.query = async (sql, params) => {
+    executedSql = sql;
+    executedParams = params;
+    return { rows: [{ id: 1 }] };
+  };
 
   await assert.doesNotReject(() => assertActiveAuthSession({
     userId: 7,
     tokenId: 'test-session-id'
   }));
+
+  assert.match(executedSql, /token_id = \$1[\s\S]*user_id = \$2/i);
+  assert.deepEqual(executedParams, ['test-session-id', 7]);
 });
 
 test('rejects a session that is missing, expired, or revoked', async (t) => {
-  const originalExecute = db.execute;
+  const originalQuery = postgresDb.query;
   t.after(() => {
-    db.execute = originalExecute;
+    postgresDb.query = originalQuery;
   });
-  db.execute = async () => [[]];
+  postgresDb.query = async () => ({ rows: [] });
 
   await assert.rejects(
     () => assertActiveAuthSession({ userId: 7, tokenId: 'revoked-session-id' }),
@@ -37,20 +47,24 @@ test('rejects a session that is missing, expired, or revoked', async (t) => {
 });
 
 test('reports old sessions without deleting data', async (t) => {
-  const originalExecute = db.execute;
+  const originalQuery = postgresDb.query;
   let executedSql = '';
+  let executedParams = [];
 
   t.after(() => {
-    db.execute = originalExecute;
+    postgresDb.query = originalQuery;
   });
 
-  db.execute = async (sql) => {
+  postgresDb.query = async (sql, params) => {
     executedSql = sql;
-    return [[{
-      old_session_count: 12,
-      revoked_count: 7,
-      expired_count: 5
-    }]];
+    executedParams = params;
+    return {
+      rows: [{
+        old_session_count: '12',
+        revoked_count: '7',
+        expired_count: '5'
+      }]
+    };
   };
 
   const result = await getAuthSessionRetentionStatus();
@@ -61,5 +75,8 @@ test('reports old sessions without deleting data', async (t) => {
   assert.equal(result.expiredCount, 5);
   assert.equal(result.cleanupEnabled, false);
   assert.match(executedSql, /^\s*SELECT/i);
+  assert.match(executedSql, /\$1::integer \* INTERVAL '1 day'/i);
+  assert.deepEqual(executedParams, [authSessionRetentionDays]);
   assert.doesNotMatch(executedSql, /DELETE|UPDATE|TRUNCATE|DROP/i);
+  assert.doesNotMatch(executedSql, /DATE_SUB|\?/i);
 });
