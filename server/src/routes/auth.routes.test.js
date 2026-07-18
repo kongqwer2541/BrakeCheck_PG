@@ -4,7 +4,7 @@ import test from 'node:test';
 
 process.env.SESSION_SECRET = 'test_session_secret_at_least_32_chars';
 
-const [{ app }, { db }, { hashPassword }] = await Promise.all([
+const [{ app }, { postgresDb }, { hashPassword }] = await Promise.all([
   import('../app.js'),
   import('../config/database.js'),
   import('../utils/password.js')
@@ -63,7 +63,7 @@ async function withServer(callback) {
 }
 
 test('logout revokes the current token', async (t) => {
-  const originalExecute = db.execute;
+  const originalQuery = postgresDb.query;
   const password = 'test-password-123';
   const passwordHash = await hashPassword(password);
   const user = {
@@ -82,36 +82,36 @@ test('logout revokes the current token', async (t) => {
   let revoked = false;
 
   t.after(() => {
-    db.execute = originalExecute;
+    postgresDb.query = originalQuery;
   });
 
-  db.execute = async (sql, params = []) => {
+  postgresDb.query = async (sql, params = []) => {
     const normalizedSql = sql.replace(/\s+/g, ' ').trim();
 
-    if (normalizedSql.includes('FROM users') && normalizedSql.includes('employee_code = ?')) {
-      return [[user]];
+    if (normalizedSql.includes('FROM users') && normalizedSql.includes('employee_code = $1')) {
+      return { rows: [user] };
     }
 
     if (normalizedSql.startsWith('UPDATE users')) {
-      return [{ affectedRows: 1 }];
+      return { rows: [], rowCount: 1 };
     }
 
-    if (normalizedSql.includes('FROM users') && normalizedSql.includes('WHERE id = ?')) {
-      return [[user]];
+    if (normalizedSql.includes('FROM users') && normalizedSql.includes('WHERE id = $1')) {
+      return { rows: [user] };
     }
 
     if (normalizedSql.startsWith('INSERT INTO auth_sessions')) {
       [storedTokenId] = params;
-      return [{ insertId: 1 }];
+      return { rows: [], rowCount: 1 };
     }
 
     if (normalizedSql.includes('FROM auth_sessions')) {
-      return [revoked ? [] : [{ id: 1 }]];
+      return { rows: revoked ? [] : [{ id: 1 }] };
     }
 
     if (normalizedSql.startsWith('UPDATE auth_sessions')) {
       revoked = true;
-      return [{ affectedRows: 1 }];
+      return { rows: [], rowCount: 1 };
     }
 
     throw new Error(`Unexpected test query: ${normalizedSql}`);
@@ -158,13 +158,13 @@ test('logout revokes the current token', async (t) => {
 });
 
 test('database errors return a generic response without internal details', async (t) => {
-  const originalExecute = db.execute;
+  const originalQuery = postgresDb.query;
 
   t.after(() => {
-    db.execute = originalExecute;
+    postgresDb.query = originalQuery;
   });
 
-  db.execute = async () => {
+  postgresDb.query = async () => {
     throw new Error('Sensitive SQL detail: SELECT password_hash FROM users');
   };
 

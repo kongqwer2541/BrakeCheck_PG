@@ -13,6 +13,7 @@ backups/
 !server/src/database/**/*.sql
 
 # Runtime storage
+server/.brakecheck-server.pid
 storage/uploads/**
 storage/exports/**
 storage/attachments/**

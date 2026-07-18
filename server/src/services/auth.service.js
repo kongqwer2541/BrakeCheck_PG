@@ -1,5 +1,6 @@
-import { db } from '../config/database.js';
+import { postgresDb } from '../config/database.js';
 import { comparePassword, hashPassword, validateNewPassword } from '../utils/password.js';
+import { withPostgresTransaction } from '../utils/postgres-transaction.js';
 import { createAuthToken, tokenExpiresIn } from '../utils/token.js';
 import {
   createAuthSession,
@@ -26,7 +27,7 @@ function isLocked(user) {
 }
 
 async function findUserByEmployeeCode(employeeCode) {
-  const [rows] = await db.execute(
+  const { rows } = await postgresDb.query(
     `SELECT
       id,
       employee_code,
@@ -39,7 +40,7 @@ async function findUserByEmployeeCode(employeeCode) {
       failed_login_count,
       locked_until
      FROM users
-     WHERE employee_code = ?
+     WHERE employee_code = $1
      LIMIT 1`,
     [employeeCode]
   );
@@ -48,7 +49,7 @@ async function findUserByEmployeeCode(employeeCode) {
 }
 
 async function findUserById(userId) {
-  const [rows] = await db.execute(
+  const { rows } = await postgresDb.query(
     `SELECT
       id,
       employee_code,
@@ -61,7 +62,7 @@ async function findUserById(userId) {
       failed_login_count,
       locked_until
      FROM users
-     WHERE id = ?
+     WHERE id = $1
      LIMIT 1`,
     [userId]
   );
@@ -69,34 +70,26 @@ async function findUserById(userId) {
   return rows[0] || null;
 }
 
-async function recordFailedLogin(user) {
-  const nextFailedCount = Number(user.failed_login_count || 0) + 1;
-
-  if (nextFailedCount >= maxFailedLogins) {
-    await db.execute(
-      `UPDATE users
-       SET failed_login_count = ?,
-           locked_until = DATE_ADD(NOW(), INTERVAL 15 MINUTE)
-       WHERE id = ?`,
-      [nextFailedCount, user.id]
-    );
-    return;
-  }
-
-  await db.execute(
+async function recordFailedLogin(userId) {
+  await postgresDb.query(
     `UPDATE users
-     SET failed_login_count = ?
-     WHERE id = ?`,
-    [nextFailedCount, user.id]
+     SET failed_login_count = failed_login_count + 1,
+         locked_until = CASE
+           WHEN failed_login_count + 1 >= $1
+             THEN CURRENT_TIMESTAMP + INTERVAL '15 minutes'
+           ELSE locked_until
+         END
+     WHERE id = $2`,
+    [maxFailedLogins, userId]
   );
 }
 
 async function clearLoginLock(userId) {
-  await db.execute(
+  await postgresDb.query(
     `UPDATE users
      SET failed_login_count = 0,
          locked_until = NULL
-     WHERE id = ?`,
+     WHERE id = $1`,
     [userId]
   );
 }
@@ -133,7 +126,7 @@ export async function login({ employeeCode, password }) {
   const passwordMatches = await comparePassword(password, user.password_hash);
 
   if (!passwordMatches) {
-    await recordFailedLogin(user);
+    await recordFailedLogin(user.id);
     const error = new Error('รหัสพนักงานหรือรหัสผ่านไม่ถูกต้อง');
     error.statusCode = 401;
     throw error;
@@ -196,27 +189,18 @@ export async function changePassword({ userId, currentPassword, newPassword }) {
   }
 
   const newPasswordHash = await hashPassword(newPassword);
-  const connection = await db.getConnection();
-
-  try {
-    await connection.beginTransaction();
-    await connection.execute(
+  await withPostgresTransaction(postgresDb, async (client) => {
+    await client.query(
       `UPDATE users
-       SET password_hash = ?,
+       SET password_hash = $1,
            must_change_password = FALSE,
            failed_login_count = 0,
            locked_until = NULL
-       WHERE id = ?`,
+       WHERE id = $2`,
       [newPasswordHash, user.id]
     );
-    await revokeAllUserAuthSessions(user.id, 'password_change', connection);
-    await connection.commit();
-  } catch (error) {
-    await connection.rollback();
-    throw error;
-  } finally {
-    connection.release();
-  }
+    await revokeAllUserAuthSessions(user.id, 'password_change', client);
+  });
 
   const updatedUser = await findUserById(user.id);
 
