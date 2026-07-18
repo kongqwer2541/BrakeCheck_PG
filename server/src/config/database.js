@@ -20,6 +20,7 @@ export const postgresDb = new Pool({
   database: env.db.name,
   user: env.db.user,
   password: env.db.password,
+  options: '-c timezone=Asia/Bangkok',
   max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000
