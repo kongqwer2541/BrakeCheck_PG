@@ -6,6 +6,12 @@ async function loadDatabaseConfig() {
   return import('./database.js');
 }
 
+test('PostgreSQL pool starts sessions in the Asia/Bangkok timezone', async () => {
+  const { postgresDb } = await loadDatabaseConfig();
+
+  assert.equal(postgresDb.options.options, '-c timezone=Asia/Bangkok');
+});
+
 test('PostgreSQL pool handles idle client errors without exposing details', async () => {
   const { postgresDb } = await loadDatabaseConfig();
   const loggedMessages = [];
