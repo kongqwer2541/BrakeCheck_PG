@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { db } from '../config/database.js';
+import { postgresDb } from '../config/database.js';
 import {
   createInspectionTopic,
   deactivateInspectionTopic,
@@ -12,24 +13,46 @@ import {
   updateSamplingRules
 } from './settings.service.js';
 
+test('settings service uses PostgreSQL query APIs', async () => {
+  const source = await readFile(new URL('./settings.service.js', import.meta.url), 'utf8');
+
+  assert.match(source, /import \{ postgresDb \}/);
+  assert.doesNotMatch(source, /\.execute\(|GET_LOCK|RELEASE_LOCK|ON DUPLICATE KEY/);
+  assert.match(source, /ON CONFLICT \(slot_no\) DO UPDATE/);
+  assert.match(source, /RETURNING id/);
+  assert.match(source, /pg_try_advisory_lock/);
+  assert.match(source, /pg_advisory_unlock/);
+  assert.doesNotMatch(source, /pg_try_advisory_xact_lock/);
+});
+
+test('settings UI limits topic values to PostgreSQL schema', async () => {
+  const source = await readFile(
+    new URL('../../../client/src/pages/system-settings.page.js', import.meta.url),
+    'utf8'
+  );
+
+  assert.match(source, /name="decimalPlaces"[^>]*max="3"/);
+  assert.match(source, /name="measurePiecesCustom"[^>]*maxlength="50"/);
+});
+
 test('settings schema error is detected for missing Step 12 columns', () => {
-  assert.equal(isSystemSettingsSchemaError({ code: 'ER_BAD_FIELD_ERROR' }), true);
-  assert.equal(isSystemSettingsSchemaError({ code: 'ER_NO_SUCH_TABLE' }), true);
-  assert.equal(isSystemSettingsSchemaError({ code: 'ER_PARSE_ERROR' }), false);
+  assert.equal(isSystemSettingsSchemaError({ code: '42703' }), true);
+  assert.equal(isSystemSettingsSchemaError({ code: '42P01' }), true);
+  assert.equal(isSystemSettingsSchemaError({ code: '42601' }), false);
 });
 
 test('getSystemSettings returns read-only settings data', async () => {
   const calls = [];
   const connection = {
-    async execute(sql) {
+    async query(sql) {
       calls.push(sql);
 
       if (sql.includes('system_setting_audit_logs')) {
-        return [[]];
+        return { rows: [] };
       }
 
       if (sql.includes('FROM form_config')) {
-        return [[
+        return { rows: [
           {
             id: 105,
             form_type: 'dimension',
@@ -43,31 +66,31 @@ test('getSystemSettings returns read-only settings data', async () => {
             rule_key: 'hole_inspection',
             is_active: 1
           }
-        ]];
+        ] };
       }
 
       if (sql.includes('FROM sampling_rules')) {
-        return [[
+        return { rows: [
           { id: 1, qty_min: 2, qty_max: 100, sample_count: 2 }
-        ]];
+        ] };
       }
 
       if (sql.includes('FROM dimension_instrument_prefixes')) {
-        return [[
+        return { rows: [
           { slot_no: 1, prefix: 'A-01-' },
           { slot_no: 2, prefix: 'A-01-' },
           { slot_no: 3, prefix: 'A-07-' },
           { slot_no: 4, prefix: 'A-01-' },
           { slot_no: 5, prefix: 'A-01-' }
-        ]];
+        ] };
       }
 
       if (sql.includes('dimension_inspections')) {
-        return [[{ dimension_draft_count: 0, packing_draft_count: 0 }]];
+        return { rows: [{ dimension_draft_count: 0, packing_draft_count: 0 }] };
       }
 
       if (sql.includes('FROM system_setting_audit_logs')) {
-        return [[]];
+        return { rows: [] };
       }
 
       throw new Error(`Unexpected query: ${sql}`);
@@ -100,9 +123,9 @@ test('getSystemSettings returns read-only settings data', async () => {
 
 test('getSystemSettings gives a beginner-readable error when Step 12 migration is missing', async () => {
   const connection = {
-    async execute() {
-      const error = new Error('Unknown column rule_key');
-      error.code = 'ER_BAD_FIELD_ERROR';
+    async query() {
+      const error = new Error('column rule_key does not exist');
+      error.code = '42703';
       throw error;
     }
   };
@@ -119,18 +142,18 @@ test('getSystemSettings gives a beginner-readable error when Step 12 migration i
 
 test('getSystemSettings rejects partial migration when audit table is missing', async () => {
   const connection = {
-    async execute(sql) {
+    async query(sql) {
       if (sql.includes('FROM form_config')) {
-        return [[]];
+        return { rows: [] };
       }
 
       if (sql.includes('FROM sampling_rules')) {
-        return [[]];
+        return { rows: [] };
       }
 
       if (sql.includes('system_setting_audit_logs')) {
-        const error = new Error('Table does not exist');
-        error.code = 'ER_NO_SUCH_TABLE';
+        const error = new Error('relation does not exist');
+        error.code = '42P01';
         throw error;
       }
 
@@ -150,21 +173,21 @@ test('getSystemSettings rejects partial migration when audit table is missing', 
 
 test('createInspectionTopic rejects active duplicate names in the same form', async () => {
   const connection = {
-    async execute(sql) {
-      if (sql.includes('GET_LOCK')) {
-        return [[{ lock_status: 1 }]];
+    async query(sql) {
+      if (sql.includes('pg_try_advisory_lock')) {
+        return { rows: [{ lock_status: true }] };
       }
 
-      if (sql.includes('RELEASE_LOCK')) {
-        return [[{ released: 1 }]];
+      if (sql.includes('pg_advisory_unlock')) {
+        return { rows: [{ released: true }] };
       }
 
       if (sql.includes('dimension_inspections')) {
-        return [[{ dimension_draft_count: 0, packing_draft_count: 0 }]];
+        return { rows: [{ dimension_draft_count: 0, packing_draft_count: 0 }] };
       }
 
       if (sql.includes('LOWER(TRIM(topic_name))')) {
-        return [[{ id: 10, is_active: 1 }]];
+        return { rows: [{ id: 10, is_active: true }] };
       }
 
       throw new Error(`Unexpected query: ${sql}`);
@@ -194,17 +217,17 @@ test('createInspectionTopic rejects active duplicate names in the same form', as
 
 test('createInspectionTopic blocks changes while inspection drafts exist', async () => {
   const connection = {
-    async execute(sql) {
-      if (sql.includes('GET_LOCK')) {
-        return [[{ lock_status: 1 }]];
+    async query(sql) {
+      if (sql.includes('pg_try_advisory_lock')) {
+        return { rows: [{ lock_status: true }] };
       }
 
-      if (sql.includes('RELEASE_LOCK')) {
-        return [[{ released: 1 }]];
+      if (sql.includes('pg_advisory_unlock')) {
+        return { rows: [{ released: true }] };
       }
 
       if (sql.includes('dimension_inspections')) {
-        return [[{ dimension_draft_count: 2, packing_draft_count: 1 }]];
+        return { rows: [{ dimension_draft_count: 2, packing_draft_count: 1 }] };
       }
 
       throw new Error(`Unexpected query: ${sql}`);
@@ -235,38 +258,79 @@ test('createInspectionTopic blocks changes while inspection drafts exist', async
   );
 });
 
-test('createInspectionTopic appends the new active topic and writes audit', async () => {
-  const calls = [];
+test('createInspectionTopic rejects values PostgreSQL form_config cannot store', async () => {
   const connection = {
-    async execute(sql, params = []) {
+    async query(sql) {
+      throw new Error(`Database should not be queried: ${sql}`);
+    }
+  };
+  const input = {
+    topicName: 'Width',
+    inputType: 'number',
+    inputCount: 1,
+    decimalPlaces: 3,
+    measurePieces: 'all',
+    reason: 'validate limits'
+  };
+
+  await assert.rejects(
+    () => createInspectionTopic({
+      formType: 'dimension',
+      input: { ...input, decimalPlaces: 4 },
+      user: { id: 1 },
+      connection
+    }),
+    (error) => error.statusCode === 400 && /ทศนิยม/.test(error.message)
+  );
+
+  await assert.rejects(
+    () => createInspectionTopic({
+      formType: 'dimension',
+      input: { ...input, measurePieces: '1-21' },
+      user: { id: 1 },
+      connection
+    }),
+    (error) => error.statusCode === 400 && /ตรวจชิ้น/.test(error.message)
+  );
+});
+
+test('createInspectionTopic appends the new active topic and writes audit', async (t) => {
+  const calls = [];
+  let connectionReleased = false;
+  const connection = {
+    async query(sql, params = []) {
       calls.push({ sql, params });
 
-      if (sql.includes('GET_LOCK')) {
-        return [[{ lock_status: 1 }]];
+      if (sql.includes('pg_try_advisory_lock')) {
+        return { rows: [{ lock_status: true }] };
       }
 
-      if (sql.includes('RELEASE_LOCK')) {
-        return [[{ released: 1 }]];
+      if (sql.includes('pg_advisory_unlock')) {
+        return { rows: [{ released: true }] };
+      }
+
+      if (sql === 'BEGIN' || sql === 'COMMIT') {
+        return { rows: [] };
       }
 
       if (sql.includes('dimension_inspections')) {
-        return [[{ dimension_draft_count: 0, packing_draft_count: 0 }]];
+        return { rows: [{ dimension_draft_count: 0, packing_draft_count: 0 }] };
       }
 
       if (sql.includes('LOWER(TRIM(topic_name))')) {
-        return [[]];
+        return { rows: [] };
       }
 
       if (sql.includes('MAX(display_order)')) {
-        return [[{ max_order: 5 }]];
+        return { rows: [{ max_order: 5 }] };
       }
 
       if (sql.includes('INSERT INTO form_config')) {
-        return [{ insertId: 123 }];
+        return { rows: [{ id: 123 }] };
       }
 
-      if (sql.includes('WHERE id = ?')) {
-        return [[{
+      if (sql.includes('WHERE id = $1')) {
+        return { rows: [{
           id: 123,
           form_type: 'dimension',
           topic_name: 'Width',
@@ -278,16 +342,22 @@ test('createInspectionTopic appends the new active topic and writes audit', asyn
           remark: 'new topic',
           rule_key: '',
           is_active: 1
-        }]];
+        }] };
       }
 
       if (sql.includes('INSERT INTO system_setting_audit_logs')) {
-        return [{ insertId: 777 }];
+        return { rows: [] };
       }
 
       throw new Error(`Unexpected query: ${sql}`);
+    },
+    release(error) {
+      assert.equal(error, undefined);
+      connectionReleased = true;
     }
   };
+
+  t.mock.method(postgresDb, 'connect', async () => connection);
 
   const result = await createInspectionTopic({
     formType: 'dimension',
@@ -300,8 +370,7 @@ test('createInspectionTopic appends the new active topic and writes audit', asyn
       remark: 'new topic',
       reason: 'add width'
     },
-    user: { id: 1, fullName: 'Head User', position: 'Head' },
-    connection
+    user: { id: 1, fullName: 'Head User', position: 'Head' }
   });
 
   assert.equal(result.topic.id, 123);
@@ -310,8 +379,18 @@ test('createInspectionTopic appends the new active topic and writes audit', asyn
     calls.some((call) => call.sql.includes('INSERT INTO system_setting_audit_logs')),
     true
   );
-  assert.equal(calls.some((call) => call.sql.includes('GET_LOCK')), true);
-  assert.equal(calls.some((call) => call.sql.includes('RELEASE_LOCK')), true);
+  assert.equal(calls.some((call) => call.sql.includes('pg_try_advisory_lock')), true);
+  assert.equal(calls.some((call) => call.sql.includes('pg_advisory_unlock')), true);
+  assert.equal(calls.some((call) => call.sql.includes('RETURNING id')), true);
+  assert.equal(connectionReleased, true);
+  assert.ok(
+    calls.findIndex((call) => call.sql.includes('pg_try_advisory_lock'))
+      < calls.findIndex((call) => call.sql === 'BEGIN')
+  );
+  assert.ok(
+    calls.findIndex((call) => call.sql === 'COMMIT')
+      < calls.findIndex((call) => call.sql.includes('pg_advisory_unlock'))
+  );
 });
 
 test('deactivateInspectionTopic requires reason and blocks draft inspections', async () => {
@@ -320,7 +399,7 @@ test('deactivateInspectionTopic requires reason and blocks draft inspections', a
       topicId: 10,
       input: { reason: '' },
       user: { id: 1 },
-      connection: { execute: async () => [[]] }
+      connection: { query: async () => ({ rows: [] }) }
     }),
     (error) => {
       assert.equal(error.statusCode, 400);
@@ -337,11 +416,11 @@ test('updateInspectionTopicDisplays updates multiple topics and writes audit log
   ]);
 
   const connection = {
-    async execute(sql, params = []) {
+    async query(sql, params = []) {
       calls.push({ sql, params });
 
       if (sql.includes('dimension_inspections')) {
-        return [[{ dimension_draft_count: 0, packing_draft_count: 0 }]];
+        return { rows: [{ dimension_draft_count: 0, packing_draft_count: 0 }] };
       }
 
       if (sql.includes('UPDATE form_config')) {
@@ -351,12 +430,12 @@ test('updateInspectionTopicDisplays updates multiple topics and writes audit log
           display_order: displayOrder,
           remark
         });
-        return [{ affectedRows: 1 }];
+        return { rows: [] };
       }
 
-      if (sql.includes('WHERE id = ?')) {
+      if (sql.includes('WHERE id = $1')) {
         const topic = topics.get(Number(params[0]));
-        return [[{
+        return { rows: [{
           id: topic.id,
           form_type: 'dimension',
           topic_name: topic.id === 10 ? 'Width' : 'Length',
@@ -368,11 +447,11 @@ test('updateInspectionTopicDisplays updates multiple topics and writes audit log
           remark: topic.remark,
           rule_key: '',
           is_active: 1
-        }]];
+        }] };
       }
 
       if (sql.includes('INSERT INTO system_setting_audit_logs')) {
-        return [{ insertId: 800 + calls.length }];
+        return { rows: [] };
       }
 
       throw new Error(`Unexpected query: ${sql}`);
@@ -395,11 +474,17 @@ test('updateInspectionTopicDisplays updates multiple topics and writes audit log
   );
 });
 
-test('createInspectionTopic rejects when duplicate-name lock cannot be acquired', async () => {
+test('createInspectionTopic rejects when duplicate-name lock cannot be acquired', async (t) => {
+  let now = 0;
+  t.mock.method(Date, 'now', () => {
+    now += 5001;
+    return now;
+  });
+
   const connection = {
-    async execute(sql) {
-      if (sql.includes('GET_LOCK')) {
-        return [[{ lock_status: 0 }]];
+    async query(sql) {
+      if (sql.includes('pg_try_advisory_lock')) {
+        return { rows: [{ lock_status: false }] };
       }
 
       throw new Error(`Unexpected query: ${sql}`);
@@ -429,13 +514,13 @@ test('createInspectionTopic rejects when duplicate-name lock cannot be acquired'
 
 test('deactivateInspectionTopic rejects the last active topic in the form', async () => {
   const connection = {
-    async execute(sql) {
+    async query(sql) {
       if (sql.includes('dimension_inspections')) {
-        return [[{ dimension_draft_count: 0, packing_draft_count: 0 }]];
+        return { rows: [{ dimension_draft_count: 0, packing_draft_count: 0 }] };
       }
 
-      if (sql.includes('WHERE id = ?')) {
-        return [[{
+      if (sql.includes('WHERE id = $1')) {
+        return { rows: [{
           id: 10,
           form_type: 'dimension',
           topic_name: 'Width',
@@ -447,11 +532,11 @@ test('deactivateInspectionTopic rejects the last active topic in the form', asyn
           remark: '',
           rule_key: '',
           is_active: 1
-        }]];
+        }] };
       }
 
       if (sql.includes('COUNT(*) AS active_count')) {
-        return [[{ active_count: 0 }]];
+        return { rows: [{ active_count: 0 }] };
       }
 
       throw new Error(`Unexpected query: ${sql}`);
@@ -475,30 +560,30 @@ test('deactivateInspectionTopic rejects the last active topic in the form', asyn
 test('updateSamplingRules replaces rules as one audited set', async () => {
   const calls = [];
   const connection = {
-    async execute(sql, params = []) {
+    async query(sql, params = []) {
       calls.push({ sql, params });
 
       if (sql.includes('dimension_inspections')) {
-        return [[{ dimension_draft_count: 0, packing_draft_count: 0 }]];
+        return { rows: [{ dimension_draft_count: 0, packing_draft_count: 0 }] };
       }
 
       if (sql.includes('FROM sampling_rules')) {
-        return [[
+        return { rows: [
           { id: 1, qty_min: 1, qty_max: 100, sample_count: 2 },
           { id: 2, qty_min: 101, qty_max: null, sample_count: 3 }
-        ]];
+        ] };
       }
 
       if (sql.includes('DELETE FROM sampling_rules')) {
-        return [{ affectedRows: 2 }];
+        return { rows: [] };
       }
 
       if (sql.includes('INSERT INTO sampling_rules')) {
-        return [{ affectedRows: 2 }];
+        return { rows: [] };
       }
 
       if (sql.includes('INSERT INTO system_setting_audit_logs')) {
-        return [{ insertId: 900 }];
+        return { rows: [] };
       }
 
       throw new Error(`Unexpected query: ${sql}`);
@@ -530,7 +615,7 @@ test('updateSamplingRules rejects gaps and non-1 starting range', async () => {
       ],
       reason: 'bad start',
       user: { id: 1 },
-      connection: { execute: async () => [[]] }
+      connection: { query: async () => ({ rows: [] }) }
     }),
     (error) => {
       assert.equal(error.statusCode, 400);
@@ -546,7 +631,7 @@ test('updateSamplingRules rejects gaps and non-1 starting range', async () => {
       ],
       reason: 'bad gap',
       user: { id: 1 },
-      connection: { execute: async () => [[]] }
+      connection: { query: async () => ({ rows: [] }) }
     }),
     (error) => {
       assert.equal(error.statusCode, 400);
@@ -559,34 +644,29 @@ test('updateSamplingRules rolls back when inserting a replacement rule fails', a
   const calls = [];
   let insertCount = 0;
   const connection = {
-    async beginTransaction() {
-      calls.push({ sql: 'BEGIN' });
-    },
-    async commit() {
-      calls.push({ sql: 'COMMIT' });
-    },
-    async rollback() {
-      calls.push({ sql: 'ROLLBACK' });
-    },
     release() {
       calls.push({ sql: 'RELEASE' });
     },
-    async execute(sql, params = []) {
+    async query(sql, params = []) {
       calls.push({ sql, params });
 
+      if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql)) {
+        return { rows: [] };
+      }
+
       if (sql.includes('dimension_inspections')) {
-        return [[{ dimension_draft_count: 0, packing_draft_count: 0 }]];
+        return { rows: [{ dimension_draft_count: 0, packing_draft_count: 0 }] };
       }
 
       if (sql.includes('FROM sampling_rules')) {
-        return [[
+        return { rows: [
           { id: 1, qty_min: 1, qty_max: 100, sample_count: 2 },
           { id: 2, qty_min: 101, qty_max: null, sample_count: 3 }
-        ]];
+        ] };
       }
 
       if (sql.includes('DELETE FROM sampling_rules')) {
-        return [{ affectedRows: 2 }];
+        return { rows: [] };
       }
 
       if (sql.includes('INSERT INTO sampling_rules')) {
@@ -594,14 +674,14 @@ test('updateSamplingRules rolls back when inserting a replacement rule fails', a
         if (insertCount === 2) {
           throw new Error('insert failed');
         }
-        return [{ affectedRows: 1 }];
+        return { rows: [] };
       }
 
       throw new Error(`Unexpected query: ${sql}`);
     }
   };
 
-  t.mock.method(db, 'getConnection', async () => connection);
+  t.mock.method(postgresDb, 'connect', async () => connection);
 
   await assert.rejects(
     () => updateSamplingRules({
@@ -630,15 +710,15 @@ test('updateInstrumentPrefixes saves five valid prefixes and rejects bad format'
     { slot_no: 5, prefix: 'A-01-' }
   ];
   const connection = {
-    async execute(sql, params = []) {
+    async query(sql, params = []) {
       calls.push({ sql, params });
 
       if (sql.includes('dimension_inspections')) {
-        return [[{ dimension_draft_count: 0, packing_draft_count: 0 }]];
+        return { rows: [{ dimension_draft_count: 0, packing_draft_count: 0 }] };
       }
 
       if (sql.includes('FROM dimension_instrument_prefixes')) {
-        return [prefixRows.map((row) => ({ ...row }))];
+        return { rows: prefixRows.map((row) => ({ ...row })) };
       }
 
       if (sql.includes('INSERT INTO dimension_instrument_prefixes')) {
@@ -647,11 +727,11 @@ test('updateInstrumentPrefixes saves five valid prefixes and rejects bad format'
         if (row) {
           row.prefix = prefix;
         }
-        return [{ affectedRows: 1 }];
+        return { rows: [] };
       }
 
       if (sql.includes('INSERT INTO system_setting_audit_logs')) {
-        return [{ insertId: 901 }];
+        return { rows: [] };
       }
 
       throw new Error(`Unexpected query: ${sql}`);
@@ -667,6 +747,7 @@ test('updateInstrumentPrefixes saves five valid prefixes and rejects bad format'
 
   assert.equal(result.prefixes[0].prefix, 'A-02-');
   assert.equal(calls.some((call) => call.sql.includes('INSERT INTO dimension_instrument_prefixes')), true);
+  assert.equal(calls.some((call) => call.sql.includes('ON CONFLICT (slot_no) DO UPDATE')), true);
 
   await assert.rejects(
     () => updateInstrumentPrefixes({
