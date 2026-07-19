@@ -10,6 +10,12 @@ import {
 
 const maxFailedLogins = 5;
 
+function invalidCredentialsError() {
+  const error = new Error('รหัสพนักงานหรือรหัสผ่านไม่ถูกต้อง');
+  error.statusCode = 401;
+  return error;
+}
+
 function publicUser(user) {
   return {
     id: user.id,
@@ -71,17 +77,24 @@ async function findUserById(userId) {
 }
 
 async function recordFailedLogin(userId) {
-  await postgresDb.query(
+  const { rows } = await postgresDb.query(
     `UPDATE users
-     SET failed_login_count = failed_login_count + 1,
+     SET failed_login_count = CASE
+           WHEN locked_until IS NOT NULL AND locked_until <= CURRENT_TIMESTAMP THEN 1
+           ELSE failed_login_count + 1
+         END,
          locked_until = CASE
+           WHEN locked_until IS NOT NULL AND locked_until <= CURRENT_TIMESTAMP THEN NULL
            WHEN failed_login_count + 1 >= $1
              THEN CURRENT_TIMESTAMP + INTERVAL '15 minutes'
            ELSE locked_until
          END
-     WHERE id = $2`,
+     WHERE id = $2
+     RETURNING failed_login_count, locked_until`,
     [maxFailedLogins, userId]
   );
+
+  return rows[0] || null;
 }
 
 async function clearLoginLock(userId) {
@@ -94,10 +107,13 @@ async function clearLoginLock(userId) {
   );
 }
 
-export async function login({ employeeCode, password }) {
-  const cleanedEmployeeCode = String(employeeCode || '').trim();
+export async function login(credentials = {}) {
+  const { employeeCode, password } = credentials || {};
+  const cleanedEmployeeCode = typeof employeeCode === 'string'
+    ? employeeCode.trim()
+    : '';
 
-  if (!cleanedEmployeeCode || !password) {
+  if (!cleanedEmployeeCode || typeof password !== 'string' || !password) {
     const error = new Error('กรุณากรอกรหัสพนักงานและรหัสผ่าน');
     error.statusCode = 400;
     throw error;
@@ -106,35 +122,32 @@ export async function login({ employeeCode, password }) {
   const user = await findUserByEmployeeCode(cleanedEmployeeCode);
 
   if (!user) {
-    const error = new Error('รหัสพนักงานหรือรหัสผ่านไม่ถูกต้อง');
-    error.statusCode = 401;
-    throw error;
+    throw invalidCredentialsError();
   }
 
   if (user.status !== 'active') {
-    const error = new Error('บัญชีนี้ถูกระงับการใช้งาน');
-    error.statusCode = 403;
-    throw error;
+    throw invalidCredentialsError();
   }
 
   if (isLocked(user)) {
-    const error = new Error('บัญชีถูกล็อคชั่วคราว กรุณาลองใหม่ภายหลัง');
-    error.statusCode = 423;
-    throw error;
+    throw invalidCredentialsError();
   }
 
   const passwordMatches = await comparePassword(password, user.password_hash);
 
   if (!passwordMatches) {
     await recordFailedLogin(user.id);
-    const error = new Error('รหัสพนักงานหรือรหัสผ่านไม่ถูกต้อง');
-    error.statusCode = 401;
-    throw error;
+    throw invalidCredentialsError();
   }
 
   await clearLoginLock(user.id);
 
   const freshUser = await findUserById(user.id);
+
+  if (!freshUser || freshUser.status !== 'active') {
+    throw invalidCredentialsError();
+  }
+
   const { token, tokenId, expiresAt } = createAuthToken(freshUser);
   await createAuthSession({
     userId: freshUser.id,
