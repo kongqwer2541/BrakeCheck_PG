@@ -1,4 +1,4 @@
-import { db } from '../config/database.js';
+import { postgresDb } from '../config/database.js';
 
 const defaultPageSize = 50;
 const maxSearchLength = 80;
@@ -159,8 +159,8 @@ function escapeLikeSearch(value) {
   return value.replace(/[\\%_]/g, (matchedText) => `\\${matchedText}`);
 }
 
-async function getLatestProductionDate(connection = db) {
-  const [rows] = await connection.execute(
+async function getLatestProductionDate(connection = postgresDb) {
+  const { rows } = await connection.query(
     `SELECT MAX(production_date) AS latest_date
      FROM lots
      WHERE production_date IS NOT NULL
@@ -175,19 +175,20 @@ function buildBaseWhere({ dateRange, search }) {
   const params = [];
 
   if (dateRange) {
-    conditions.push('lots.production_date BETWEEN ? AND ?');
     params.push(dateRange.startDate, dateRange.endDate);
+    conditions.push(`lots.production_date BETWEEN $${params.length - 1} AND $${params.length}`);
   } else {
     conditions.push('lots.production_date IS NULL');
   }
 
   if (search) {
     const likeSearch = `%${escapeLikeSearch(search)}%`;
+    const firstSearchParam = params.length + 1;
     conditions.push(`(
-      lots.lot_number LIKE ? ESCAPE '\\\\'
-      OR lots.lot_pack_barcode LIKE ? ESCAPE '\\\\'
-      OR lots.lot_packing LIKE ? ESCAPE '\\\\'
-      OR lots.model_name LIKE ? ESCAPE '\\\\'
+      lots.lot_number ILIKE $${firstSearchParam} ESCAPE '\\'
+      OR lots.lot_pack_barcode ILIKE $${firstSearchParam + 1} ESCAPE '\\'
+      OR lots.lot_packing ILIKE $${firstSearchParam + 2} ESCAPE '\\'
+      OR lots.model_name ILIKE $${firstSearchParam + 3} ESCAPE '\\'
     )`);
     params.push(likeSearch, likeSearch, likeSearch, likeSearch);
   }
@@ -324,10 +325,10 @@ function matchesStatusFilter(item, selectedStatus) {
   return item.queueStatus === selectedStatus;
 }
 
-async function getRows({ dateRange, search, connection = db }) {
+async function getRows({ dateRange, search, connection = postgresDb }) {
   const where = buildBaseWhere({ dateRange, search });
 
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT
        lots.lot_number,
        lots.lot_pack_barcode,

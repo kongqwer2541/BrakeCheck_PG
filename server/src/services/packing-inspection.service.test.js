@@ -1,16 +1,118 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import {
+process.env.SESSION_SECRET = 'test_session_secret_at_least_32_chars';
+
+const { db, postgresDb } = await import('../config/database.js');
+const {
   canEditCompletedPackingInspection,
   canSavePackingInspectionForLot,
+  getPackingInspection,
   getNextLotStatusForPacking,
   getPackingReferenceFromInspection,
   getPackingReferenceFromLot,
   getPackingReferenceFromProductionCode,
   hasPackingFailResult,
+  savePackingInspectionDraft,
   validatePackingResultsForComplete
-} from './packing-inspection.service.js';
+} = await import('./packing-inspection.service.js');
+
+test('packing inspection service uses PostgreSQL transaction and upsert syntax', async () => {
+  const source = await readFile(new URL('./packing-inspection.service.js', import.meta.url), 'utf8');
+
+  assert.match(source, /import \{ postgresDb \}/);
+  assert.match(source, /withPostgresTransaction/);
+  assert.match(source, /ON CONFLICT \(lot_id\) DO UPDATE/i);
+  assert.doesNotMatch(source, /\.execute\(|ON DUPLICATE KEY|CURDATE\(\)/);
+});
+
+test('loads packing inspection details through PostgreSQL', async (t) => {
+  const originalLegacyExecute = db.execute;
+  const originalQuery = postgresDb.query;
+  const calls = [];
+
+  t.after(() => {
+    db.execute = originalLegacyExecute;
+    postgresDb.query = originalQuery;
+  });
+
+  db.execute = async () => {
+    throw new Error('Legacy MySQL pool was used.');
+  };
+  postgresDb.query = async (sql, params = []) => {
+    calls.push({ sql, params });
+
+    if (/FROM lots/i.test(sql)) {
+      return {
+        rows: [{ id: 7, lot_number: 'LOT-1', lot_packing: 'PACK-1', quantity: 100, status: 'waiting_pack' }]
+      };
+    }
+
+    return { rows: [] };
+  };
+
+  const result = await getPackingInspection({ lotNumber: 'LOT-1' });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.packingReference.value, 'PACK-1');
+  assert.equal(calls.some(({ sql }) => sql.includes('?')), false);
+});
+
+test('saves a packing draft in one PostgreSQL transaction', async (t) => {
+  const originalLegacyGetConnection = db.getConnection;
+  const originalConnect = postgresDb.connect;
+  const calls = [];
+
+  t.after(() => {
+    db.getConnection = originalLegacyGetConnection;
+    postgresDb.connect = originalConnect;
+  });
+
+  db.getConnection = async () => {
+    throw new Error('Legacy MySQL pool was used.');
+  };
+  postgresDb.connect = async () => ({
+    query: async (sql, params = []) => {
+      calls.push({ sql, params });
+
+      if (/FROM lots/i.test(sql)) {
+        return {
+          rows: [{ id: 7, lot_number: 'LOT-1', lot_packing: 'PACK-1', quantity: 100, status: 'waiting_pack' }]
+        };
+      }
+      if (/FROM packing_inspections/i.test(sql)) {
+        if (/FOR UPDATE/i.test(sql)) {
+          return { rows: [] };
+        }
+        return { rows: [{ id: 4, status: 'draft', results_data: { topics: [] } }] };
+      }
+      if (/FROM form_config/i.test(sql)) {
+        return { rows: [] };
+      }
+
+      return { rows: [], rowCount: 1 };
+    },
+    release: () => {}
+  });
+
+  const result = await savePackingInspectionDraft({
+    lotNumber: 'LOT-1',
+    input: { resultsData: { topics: [] } },
+    user: { id: 1, role: 'officer', fullName: 'QC Test' }
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(calls[0].sql, 'BEGIN');
+  assert.equal(calls.at(-1).sql, 'COMMIT');
+  const lockedInspectionQuery = calls.find(({ sql }) => (
+    /FROM packing_inspections/i.test(sql) && /FOR UPDATE/i.test(sql)
+  ));
+  assert.ok(lockedInspectionQuery);
+  assert.match(lockedInspectionQuery.sql, /FOR UPDATE OF packing_inspections/i);
+  assert.ok(calls.some(({ sql }) => /ON CONFLICT \(lot_id\) DO UPDATE/i.test(sql)));
+  assert.equal(calls.some(({ sql }) => sql.includes('?')), false);
+});
 
 const formConfig = [
   { id: 1, topicName: 'เงื่อนไขการบรรจุ', inputType: 'pass_fail' },

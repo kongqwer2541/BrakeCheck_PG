@@ -1,4 +1,5 @@
-import { db } from '../config/database.js';
+import { postgresDb } from '../config/database.js';
+import { withPostgresTransaction } from '../utils/postgres-transaction.js';
 import { getLotApprovalEvidence } from './lot-approval-evidence.service.js';
 import {
   cleanOptionalText,
@@ -35,7 +36,7 @@ function normalizeInstrumentPrefixes(prefixRows = []) {
 
 async function getDimensionInstrumentPrefixes(connection) {
   try {
-    const [rows] = await connection.execute(
+    const { rows } = await connection.query(
       `SELECT slot_no, prefix
        FROM dimension_instrument_prefixes
        ORDER BY slot_no`
@@ -48,7 +49,7 @@ async function getDimensionInstrumentPrefixes(connection) {
       prefix
     }));
   } catch (error) {
-    if (error?.code === 'ER_NO_SUCH_TABLE') {
+    if (error?.code === '42P01') {
       return defaultInstrumentCodePrefixes.map((prefix, index) => ({
         slotNo: index + 1,
         prefix
@@ -60,7 +61,7 @@ async function getDimensionInstrumentPrefixes(connection) {
 }
 
 async function getSamplingRules(connection) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT qty_min, qty_max, sample_count
      FROM sampling_rules
      ORDER BY qty_min, id`
@@ -812,7 +813,7 @@ async function insertDimensionStatusAuditLog({
   userId,
   connection
 }) {
-  await connection.execute(
+  await connection.query(
     `INSERT INTO lot_audit_logs (
        lot_id,
        action,
@@ -821,7 +822,7 @@ async function insertDimensionStatusAuditLog({
        after_data,
        changed_by
      )
-     VALUES (?, 'edit', ?, ?, ?, ?)`,
+     VALUES ($1, 'edit', $2, $3, $4, $5)`,
     [
       lot.id,
       `ตรวจมิติเปลี่ยนสถานะ Lot: ${getLotStatusLabel(beforeStatus)} -> ${getLotStatusLabel(afterStatus)}`,
@@ -844,10 +845,10 @@ async function updateLotStatusForInspection({
 
   const beforeStatus = lot.status;
 
-  await connection.execute(
+  await connection.query(
     `UPDATE lots
-     SET status = ?
-     WHERE id = ?`,
+     SET status = $1
+     WHERE id = $2`,
     [nextStatus, lot.id]
   );
 
@@ -863,7 +864,7 @@ async function updateLotStatusForInspection({
 }
 
 async function findLotForInspection(lotNumber, connection, lock = false) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT
        id,
        lot_number,
@@ -882,7 +883,7 @@ async function findLotForInspection(lotNumber, connection, lock = false) {
        status,
        sample_count
      FROM lots
-     WHERE lot_number = ?
+     WHERE lot_number = $1
      LIMIT 1
      ${lock ? 'FOR UPDATE' : ''}`,
     [lotNumber]
@@ -892,44 +893,21 @@ async function findLotForInspection(lotNumber, connection, lock = false) {
 }
 
 async function getActiveDimensionFormConfig(connection) {
-  let rows = [];
-
-  try {
-    [rows] = await connection.execute(
-      `SELECT
-         id,
-         topic_name,
-         input_count,
-         decimal_places,
-         input_type,
-         measure_pieces,
-         rule_key,
-         display_order
-       FROM form_config
-       WHERE form_type = 'dimension'
-         AND is_active = TRUE
-       ORDER BY display_order, id`
-    );
-  } catch (error) {
-    if (error?.code !== 'ER_BAD_FIELD_ERROR') {
-      throw error;
-    }
-
-    [rows] = await connection.execute(
-      `SELECT
-         id,
-         topic_name,
-         input_count,
-         decimal_places,
-         input_type,
-         measure_pieces,
-         display_order
-       FROM form_config
-       WHERE form_type = 'dimension'
-         AND is_active = TRUE
-       ORDER BY display_order, id`
-    );
-  }
+  const { rows } = await connection.query(
+    `SELECT
+       id,
+       topic_name,
+       input_count,
+       decimal_places,
+       input_type,
+       measure_pieces,
+       rule_key,
+       display_order
+     FROM form_config
+     WHERE form_type = 'dimension'
+       AND is_active = TRUE
+     ORDER BY display_order, id`
+  );
 
   return rows.map((row) => ({
     id: row.id,
@@ -945,7 +923,7 @@ async function getActiveDimensionFormConfig(connection) {
 
 async function findInspectionByLotId(lotId, connection, lock = false) {
   if (lock) {
-    const [lockedRows] = await connection.execute(
+    const { rows: lockedRows } = await connection.query(
       `SELECT
          id,
          status,
@@ -966,7 +944,7 @@ async function findInspectionByLotId(lotId, connection, lock = false) {
          created_at,
          updated_at
        FROM dimension_inspections
-       WHERE lot_id = ?
+       WHERE lot_id = $1
        LIMIT 1
        FOR UPDATE`,
       [lotId]
@@ -975,7 +953,7 @@ async function findInspectionByLotId(lotId, connection, lock = false) {
     return lockedRows[0] || null;
   }
 
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT
        dimension_inspections.id,
        dimension_inspections.status,
@@ -1004,7 +982,7 @@ async function findInspectionByLotId(lotId, connection, lock = false) {
        ON updated_user.id = dimension_inspections.updated_by
      LEFT JOIN users completed_user
        ON completed_user.id = dimension_inspections.completed_by
-     WHERE dimension_inspections.lot_id = ?
+     WHERE dimension_inspections.lot_id = $1
      LIMIT 1`,
     [lotId]
   );
@@ -1014,9 +992,8 @@ async function findInspectionByLotId(lotId, connection, lock = false) {
 
 async function upsertInspection({ lot, input, userId, status, connection }) {
   const completedBy = status === 'completed' ? userId : null;
-  const completedAtSql = status === 'completed' ? 'NOW()' : 'NULL';
 
-  await connection.execute(
+  await connection.query(
     `INSERT INTO dimension_inspections (
        lot_id,
        status,
@@ -1036,23 +1013,26 @@ async function upsertInspection({ lot, input, userId, status, connection }) {
        completed_by,
        completed_at
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${completedAtSql})
-     ON DUPLICATE KEY UPDATE
-       status = VALUES(status),
-       inspection_date = VALUES(inspection_date),
-       shift = VALUES(shift),
-       instrument_codes = VALUES(instrument_codes),
-       rivet_no = VALUES(rivet_no),
-       production_code = VALUES(production_code),
-       brake_type = VALUES(brake_type),
-       brake_model = VALUES(brake_model),
-       rivet_hole_thickness = VALUES(rivet_hole_thickness),
-       sample_count = VALUES(sample_count),
-       form_config_snapshot = VALUES(form_config_snapshot),
-       pieces_data = VALUES(pieces_data),
-       updated_by = VALUES(updated_by),
-       completed_by = VALUES(completed_by),
-       completed_at = ${completedAtSql}`,
+     VALUES (
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+       CASE WHEN $2 = 'completed' THEN CURRENT_TIMESTAMP ELSE NULL END
+     )
+     ON CONFLICT (lot_id) DO UPDATE SET
+       status = EXCLUDED.status,
+       inspection_date = EXCLUDED.inspection_date,
+       shift = EXCLUDED.shift,
+       instrument_codes = EXCLUDED.instrument_codes,
+       rivet_no = EXCLUDED.rivet_no,
+       production_code = EXCLUDED.production_code,
+       brake_type = EXCLUDED.brake_type,
+       brake_model = EXCLUDED.brake_model,
+       rivet_hole_thickness = EXCLUDED.rivet_hole_thickness,
+       sample_count = EXCLUDED.sample_count,
+       form_config_snapshot = EXCLUDED.form_config_snapshot,
+       pieces_data = EXCLUDED.pieces_data,
+       updated_by = EXCLUDED.updated_by,
+       completed_by = EXCLUDED.completed_by,
+       completed_at = EXCLUDED.completed_at`,
     [
       lot.id,
       status,
@@ -1076,17 +1056,17 @@ async function upsertInspection({ lot, input, userId, status, connection }) {
 
 export async function getDimensionInspection({ lotNumber }) {
   const cleanedLotNumber = validateLotNumber(lotNumber);
-  const lot = await findLotForInspection(cleanedLotNumber, db);
+  const lot = await findLotForInspection(cleanedLotNumber, postgresDb);
 
   if (!lot) {
     throw createHttpError(404, 'ไม่พบ Lot ที่ต้องการ');
   }
 
-  const inspection = await findInspectionByLotId(lot.id, db);
-  const formConfig = await getActiveDimensionFormConfig(db);
-  const instrumentPrefixes = await getDimensionInstrumentPrefixes(db);
-  const samplingRules = await getSamplingRules(db);
-  const approvalEvidence = await getLotApprovalEvidence(lot.id, db);
+  const inspection = await findInspectionByLotId(lot.id, postgresDb);
+  const formConfig = await getActiveDimensionFormConfig(postgresDb);
+  const instrumentPrefixes = await getDimensionInstrumentPrefixes(postgresDb);
+  const samplingRules = await getSamplingRules(postgresDb);
+  const approvalEvidence = await getLotApprovalEvidence(lot.id, postgresDb);
 
   return {
     ok: true,
@@ -1126,10 +1106,7 @@ export async function completeDimensionInspection({ lotNumber, input, user }) {
 async function saveDimensionInspection({ lotNumber, input, user, status, isComplete, message }) {
   const cleanedLotNumber = validateLotNumber(lotNumber);
   const actorUserId = requireActorUser(user);
-  const connection = await db.getConnection();
-
-  try {
-    await connection.beginTransaction();
+  return withPostgresTransaction(postgresDb, async (connection) => {
 
     const lot = await findLotForInspection(cleanedLotNumber, connection, true);
     const currentInspection = lot ? await findInspectionByLotId(lot.id, connection, true) : null;
@@ -1215,18 +1192,11 @@ async function saveDimensionInspection({ lotNumber, input, user, status, isCompl
 
     const savedInspection = await findInspectionByLotId(lot.id, connection);
 
-    await connection.commit();
-
     return {
       ok: true,
       message: getDimensionStatusMessage(nextLotStatus, status) || message,
       lot: mapLot(lot),
       inspection: mapInspection(savedInspection)
     };
-  } catch (error) {
-    await connection.rollback();
-    throw error;
-  } finally {
-    connection.release();
-  }
+  });
 }
