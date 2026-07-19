@@ -302,6 +302,12 @@ export function hasDimensionFailResult(piecesData) {
   ));
 }
 
+function requireInspectionNoteForFailedDimension(piecesData) {
+  if (hasDimensionFailResult(piecesData) && !cleanInspectionNoteFromPiecesData(piecesData)) {
+    throw createHttpError(400, 'กรุณากรอกหมายเหตุเมื่อมีผลตรวจไม่ผ่าน');
+  }
+}
+
 function hasInspectionNoteField(piecesData) {
   return Boolean(
     piecesData
@@ -1149,6 +1155,7 @@ async function saveDimensionInspection({ lotNumber, input, user, status, isCompl
         normalizedInput.sampleCount,
         normalizedInput
       );
+      requireInspectionNoteForFailedDimension(normalizedInput.piecesData);
     } else {
       const existingPiecesData = parseJsonColumn(currentInspection?.pieces_data, { topics: [] });
       const mergedPiecesData = mergeDraftPiecesData(

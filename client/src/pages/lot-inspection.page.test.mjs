@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { renderLotInspectionPage } from './lot-inspection.page.js';
+import * as lotInspectionPage from './lot-inspection.page.js';
+
+const { renderLotInspectionPage } = lotInspectionPage;
 
 const lot = {
   lotNumber: '260605002',
@@ -12,6 +14,18 @@ const lot = {
   status: 'waiting_pack',
   statusLabel: 'รอตรวจบรรจุ'
 };
+
+test('dimension NG result requires an inspection note', () => {
+  assert.equal(typeof lotInspectionPage.requiresDimensionInspectionNote, 'function');
+  assert.equal(lotInspectionPage.requiresDimensionInspectionNote({
+    meta: { inspectionNote: '' },
+    topics: [{ rows: [{ values: ['fail'] }] }]
+  }), true);
+  assert.equal(lotInspectionPage.requiresDimensionInspectionNote({
+    meta: { inspectionNote: 'Dimension is outside tolerance' },
+    topics: [{ rows: [{ values: ['fail'] }] }]
+  }), false);
+});
 
 test('packing error keeps a clear action back to the dimension form', () => {
   const html = renderLotInspectionPage({
@@ -130,4 +144,39 @@ test('dimension form lets officers edit completed inspections sent back for fixi
   assert.match(html, /data-read-only="false"/);
   assert.match(html, /<strong>A-02-<\/strong>[\s\S]*name="instrumentCode0"[\s\S]*value="111"/);
   assert.match(html, /data-instrument-prefix="A-02-"/);
+});
+
+test('measurement Enter order completes every piece in one topic before the next topic', () => {
+  assert.equal(typeof lotInspectionPage.sortMeasurementInputsByInspectionOrder, 'function');
+
+  const createInput = (id, inputType, topicIndex, pieceNo, inputIndex) => ({
+    id,
+    dataset: {
+      inputType,
+      topicIndex: String(topicIndex),
+      pieceNo: String(pieceNo),
+      inputIndex: String(inputIndex)
+    }
+  });
+  const inputsInTableOrder = [
+    createInput('thickness-piece-1-point-1', 'number', 2, 1, 0),
+    createInput('thickness-piece-1-point-2', 'number', 2, 1, 1),
+    createInput('width-piece-1', 'number', 0, 1, 0),
+    createInput('thickness-piece-2-point-1', 'number', 2, 2, 0),
+    createInput('thickness-piece-2-point-2', 'number', 2, 2, 1),
+    createInput('packing-piece-1', 'pass_fail', 1, 1, 0)
+  ];
+
+  const orderedIds = lotInspectionPage
+    .sortMeasurementInputsByInspectionOrder(inputsInTableOrder)
+    .map((input) => input.id);
+
+  assert.deepEqual(orderedIds, [
+    'width-piece-1',
+    'thickness-piece-1-point-1',
+    'thickness-piece-1-point-2',
+    'thickness-piece-2-point-1',
+    'thickness-piece-2-point-2',
+    'packing-piece-1'
+  ]);
 });

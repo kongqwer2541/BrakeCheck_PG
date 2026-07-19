@@ -170,27 +170,27 @@ function renderTopicCreateForm(formType, { isBlocked = false } = {}) {
   return `
     <form class="settings-topic-form" data-topic-create-form data-form-type="${escapeHtml(formType)}" data-blocked="${isBlocked ? 'true' : 'false'}">
       <div class="settings-form-grid">
-        <label class="field">
+        <label class="field settings-topic-name-field">
           <span>ชื่อหัวข้อ</span>
           <input name="topicName" type="text" maxlength="120" required ${isBlocked ? 'disabled' : ''} />
           <small class="settings-warning" data-inactive-duplicate-warning hidden>มีชื่อเดียวกันในหัวข้อที่ปิดใช้งาน เพิ่มได้ แต่ควรตรวจชื่อให้ชัดเจน</small>
         </label>
-        <label class="field">
+        <label class="field settings-topic-type-field">
           <span>ชนิดการประเมิน</span>
           <select name="inputType" ${isBlocked ? 'disabled' : ''}>
             <option value="number">ตัวเลข</option>
             <option value="pass_fail">ผ่าน / ไม่ผ่าน</option>
           </select>
         </label>
-        <label class="field">
+        <label class="field settings-topic-number-field">
           <span>จำนวนช่องกรอก</span>
           <input name="inputCount" type="number" min="1" max="10" value="1" ${isPacking || isBlocked ? 'disabled' : ''} />
         </label>
-        <label class="field">
+        <label class="field settings-topic-number-field">
           <span>จำนวนทศนิยม</span>
           <input name="decimalPlaces" type="number" min="0" max="3" value="0" ${isBlocked ? 'disabled' : ''} />
         </label>
-        <label class="field">
+        <label class="field settings-topic-measure-field">
           <span>ตรวจชิ้นที่</span>
           <select name="measurePiecesMode" ${isBlocked ? 'disabled' : ''}>
             <option value="all">ทุกชิ้น</option>
@@ -198,27 +198,29 @@ function renderTopicCreateForm(formType, { isBlocked = false } = {}) {
             <option value="custom">ระบุเอง</option>
           </select>
         </label>
-        <label class="field" data-custom-pieces-field hidden>
+        <label class="field settings-topic-custom-field" data-custom-pieces-field hidden>
           <span>ระบุชิ้น เช่น 1,3,5 หรือ 1-5</span>
           <input name="measurePiecesCustom" type="text" maxlength="50" ${isBlocked ? 'disabled' : ''} />
         </label>
-        <label class="field">
+        <label class="field settings-topic-rule-field">
           <span>กฎพิเศษสำหรับหัวข้อ</span>
           <select name="ruleKey" ${isPacking || isBlocked ? 'disabled' : ''}>
             <option value="">ไม่มีเงื่อนไขพิเศษ</option>
             <option value="hole_inspection">ตรวจรูเจาะ/รูคว้าน</option>
           </select>
         </label>
-        <label class="field">
+        <label class="field settings-topic-remark-field">
           <span>หมายเหตุ</span>
           <input name="remark" type="text" maxlength="300" ${isBlocked ? 'disabled' : ''} />
         </label>
-        <label class="field wide-field">
+        <label class="field wide-field settings-topic-reason-field">
           <span>เหตุผลในการเพิ่มหัวข้อ</span>
           <input name="reason" type="text" maxlength="500" required ${isBlocked ? 'disabled' : ''} />
         </label>
       </div>
-      <button class="primary-button" type="submit" ${isBlocked ? 'disabled' : ''}>พรีวิวหัวข้อใหม่</button>
+      <div class="settings-topic-form-actions">
+        <button class="primary-button" type="submit" ${isBlocked ? 'disabled' : ''}>พรีวิวหัวข้อใหม่</button>
+      </div>
       <div class="settings-preview-panel settings-create-preview-panel" data-topic-create-preview-panel hidden></div>
     </form>
   `;
@@ -229,12 +231,12 @@ function renderTopicPanel(title, formType, topics = [], draftCounts = {}, isActi
 
   return `
     <section class="settings-section" data-settings-panel="${escapeHtml(formType)}" ${isActive ? '' : 'hidden'}>
-      <div class="compact-panel-heading">
+      <div class="compact-panel-heading settings-topic-heading">
         <div>
           <h2>${escapeHtml(title)}</h2>
           <p>เพิ่มหัวข้อใหม่ / แก้เฉพาะลำดับและหมายเหตุ / ปิดใช้งานเท่านั้น</p>
         </div>
-        <span class="status-pill">${topics.filter((topic) => topic.isActive).length} active</span>
+        <span class="status-pill settings-topic-count">${topics.filter((topic) => topic.isActive).length} active</span>
       </div>
       ${blocked ? `<p class="alert warning">ยังมี inspection draft ค้าง: ${escapeHtml(getDraftText(draftCounts))} กรุณาทำใบตรวจให้สมบูรณ์ก่อนแก้หัวข้อ</p>` : ''}
       ${blocked ? `
@@ -242,19 +244,21 @@ function renderTopicPanel(title, formType, topics = [], draftCounts = {}, isActi
           ปิดการเพิ่ม/แก้/ปิดใช้งานหัวข้อชั่วคราว เพราะยังมีใบตรวจ draft ค้าง
         </div>
       ` : renderTopicCreateForm(formType, { isBlocked: blocked })}
-      <label class="settings-toggle">
-        <input type="checkbox" data-show-inactive-toggle />
-        <span>แสดงหัวข้อที่ปิดใช้งาน</span>
-      </label>
-      ${blocked ? '' : `
-        <div class="settings-bulk-actions">
-          <button class="secondary-button" type="button" data-topic-preview-save disabled>
-            พรีวิวลำดับ/หมายเหตุ
-          </button>
-          <span class="settings-change-count" data-topic-change-count>ยังไม่มีการแก้ลำดับ/หมายเหตุ</span>
-        </div>
-      `}
-      <div class="responsive-table-wrap">
+      <div class="settings-topic-toolbar">
+        <label class="settings-toggle">
+          <input type="checkbox" data-show-inactive-toggle />
+          <span>แสดงหัวข้อที่ปิดใช้งาน</span>
+        </label>
+        ${blocked ? '' : `
+          <div class="settings-bulk-actions">
+            <button class="secondary-button" type="button" data-topic-preview-save disabled>
+              พรีวิวลำดับ/หมายเหตุ
+            </button>
+            <span class="settings-change-count" data-topic-change-count>ยังไม่มีการแก้ลำดับ/หมายเหตุ</span>
+          </div>
+        `}
+      </div>
+      <div class="responsive-table-wrap settings-topic-table-wrap">
         <table class="settings-table topic-management-table">
           <thead>
             <tr>

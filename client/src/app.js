@@ -100,10 +100,13 @@ import { canUserOpenPage } from './utils/permissions.utils.js';
 import { getExcelFileKey, validateExcelFile } from './utils/excel-file.utils.js';
 import {
   clearLastPage,
+  clearLotInspectionLocation,
   getLastPage,
+  getLotInspectionLocation,
   getRememberedInstrumentCodes,
   rememberInstrumentCodes,
-  rememberLastPage
+  rememberLastPage,
+  rememberLotInspectionLocation
 } from './utils/browser-storage.utils.js';
 
 const app = document.querySelector('#app');
@@ -488,6 +491,7 @@ function resetClientState() {
 function handleSessionExpired(message = sessionExpiredMessage) {
   clearToken();
   clearLastPage();
+  clearLotInspectionLocation();
   resetClientState();
   showLogin(message);
 }
@@ -508,6 +512,16 @@ function handleApiAccessError(error, showForbiddenMessage) {
 
 async function restoreLastPage() {
   const lastPage = getLastPage();
+  const savedInspection = getLotInspectionLocation();
+  const inspectionParentPages = ['barcode', 'approval', 'export', 'exportDimension', 'results', 'dimension', 'packing'];
+
+  if (savedInspection
+    && inspectionParentPages.includes(lastPage)
+    && canOpenPage(lastPage)) {
+    lotInspectionReadOnly = savedInspection.isReadOnly;
+    await loadLotInspection(savedInspection.lotNumber, savedInspection.activeTab);
+    return;
+  }
 
   if (lastPage === 'users' && canOpenPage('users')) {
     await showUsers();
@@ -1519,6 +1533,7 @@ async function handleLogout() {
 
   clearToken();
   clearLastPage();
+  clearLotInspectionLocation();
   resetClientState();
   showLogin();
 }
@@ -1563,6 +1578,7 @@ function handleNavigate(page) {
   const handler = navigationHandlers[route.action];
 
   if (handler) {
+    clearLotInspectionLocation();
     handler(route);
     return;
   }
@@ -2261,6 +2277,11 @@ async function loadLotInspection(lotNumber, formType = 'dimension') {
         : await getDimensionInspection(lotNumber);
 
     lotInspectionLot = result.lot;
+    rememberLotInspectionLocation({
+      lotNumber: result.lot.lotNumber,
+      activeTab: lotInspectionActiveTab,
+      isReadOnly: lotInspectionReadOnly
+    });
 
     if (lotInspectionReadOnly) {
       lotInspectionData = result.inspection;
@@ -2578,32 +2599,38 @@ function resetLotInspectionState() {
 }
 
 function handleBackToLotLookup() {
+  clearLotInspectionLocation();
   resetLotInspectionState();
   showLotLookup();
 }
 
 function handleBackToApprovalQueue() {
+  clearLotInspectionLocation();
   resetLotInspectionState();
   loadApprovalQueue();
 }
 
 function handleBackToExportReport() {
+  clearLotInspectionLocation();
   resetLotInspectionState();
   loadExportReport();
 }
 
 function handleBackToExportDimension() {
+  clearLotInspectionLocation();
   resetLotInspectionState();
   showExportDimension();
 }
 
 function handleBackToResults() {
+  clearLotInspectionLocation();
   resetLotInspectionState();
   loadResults();
 }
 
 function handleBackToInspectionQueue() {
   const targetQueue = getLastPage() === 'packing' ? 'packing' : 'dimension';
+  clearLotInspectionLocation();
   resetLotInspectionState();
   loadInspectionQueue(targetQueue);
 }

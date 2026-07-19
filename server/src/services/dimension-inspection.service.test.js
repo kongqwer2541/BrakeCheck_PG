@@ -7,12 +7,85 @@ process.env.SESSION_SECRET = 'test_session_secret_at_least_32_chars';
 const { db, postgresDb } = await import('../config/database.js');
 const {
   canEditCompletedDimensionInspection,
+  completeDimensionInspection,
   getDimensionInspection,
   saveDimensionInspectionDraft,
   validateInstrumentCodes,
   shouldMeasurePiece,
   shouldSkipTopicByWorkType
 } = await import('./dimension-inspection.service.js');
+
+test('complete dimension inspection requires note when any result fails', async (t) => {
+  const originalConnect = postgresDb.connect;
+
+  t.after(() => {
+    postgresDb.connect = originalConnect;
+  });
+
+  postgresDb.connect = async () => ({
+    query: async (sql) => {
+      if (/FROM lots/i.test(sql)) {
+        return {
+          rows: [{
+            id: 7,
+            lot_number: 'LOT-1',
+            quantity: 100,
+            sample_count: 1,
+            status: 'pending'
+          }]
+        };
+      }
+      if (/FROM dimension_inspections/i.test(sql)) {
+        return { rows: [] };
+      }
+      if (/FROM sampling_rules/i.test(sql)) {
+        return { rows: [{ qty_min: 1, qty_max: null, sample_count: 1 }] };
+      }
+      if (/FROM form_config/i.test(sql)) {
+        return {
+          rows: [{
+            id: 1,
+            topic_name: 'Final result',
+            input_count: 1,
+            decimal_places: 0,
+            input_type: 'pass_fail',
+            measure_scope: 'all',
+            measure_pieces: 'all',
+            rule_key: null,
+            display_order: 1
+          }]
+        };
+      }
+
+      return { rows: [], rowCount: 1 };
+    },
+    release: () => {}
+  });
+
+  await assert.rejects(
+    () => completeDimensionInspection({
+      lotNumber: 'LOT-1',
+      input: {
+        inspectionDate: '2026-07-19',
+        shift: '1',
+        instrumentCodes: ['A-01-001', 'A-01-002', 'A-07-003', 'A-01-004', 'A-01-005'],
+        brakeType: 'normal',
+        brakeModel: 'no_hole',
+        sampleCount: 1,
+        piecesData: {
+          meta: { inspectionNote: '' },
+          topics: [{
+            topicId: 1,
+            topicName: 'Final result',
+            rows: [{ pieceNo: 1, values: ['fail'] }]
+          }]
+        }
+      },
+      user: { id: 1, role: 'officer', fullName: 'QC Test' }
+    }),
+    /กรุณากรอกหมายเหตุเมื่อมีผลตรวจไม่ผ่าน/
+  );
+});
 
 test('dimension inspection service uses PostgreSQL transaction and upsert syntax', async () => {
   const source = await readFile(new URL('./dimension-inspection.service.js', import.meta.url), 'utf8');

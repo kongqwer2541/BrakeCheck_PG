@@ -102,6 +102,29 @@ describe('resolveProductionDate', () => {
     assert.deepEqual(result.errors, ['วันฝนไม่ถูกต้อง']);
     assert.deepEqual(result.warnings, []);
   });
+
+  test('blocks a Date object beyond the allowed production year range', async () => {
+    const { resolveProductionDate } = await loadExcelReader();
+    const result = resolveProductionDate(new Date(29279, 0, 23), '260709ABC');
+
+    assert.equal(result.value, null);
+    assert.deepEqual(result.errors, ['วันฝนไม่ถูกต้อง']);
+    assert.deepEqual(result.warnings, []);
+  });
+
+  test('blocks Excel serial and text dates outside the allowed production year range', async () => {
+    const { resolveProductionDate } = await loadExcelReader();
+    const farFutureExcelSerial = 10000000;
+    const futureYear = new Date().getFullYear() + 2;
+
+    for (const value of [farFutureExcelSerial, '1999-12-31', `${futureYear}-01-01`]) {
+      const result = resolveProductionDate(value, '260709ABC');
+
+      assert.equal(result.value, null);
+      assert.deepEqual(result.errors, ['วันฝนไม่ถูกต้อง']);
+      assert.deepEqual(result.warnings, []);
+    }
+  });
 });
 
 describe('readExcelPreview production date rules', () => {
@@ -146,6 +169,18 @@ describe('readExcelPreview production date rules', () => {
       lotNumber: '260709004',
       lotPackBarcode: '260709ABC',
       columnT: 'not-a-date'
+    });
+
+    assert.equal(row.productionDate, null);
+    assert.deepEqual(row.errors, ['วันฝนไม่ถูกต้อง']);
+    assert.deepEqual(row.warnings, []);
+  });
+
+  test('blocks preview when Excel contains a far-future Date object', async () => {
+    const row = await createPreviewRow({
+      lotNumber: '260709005',
+      lotPackBarcode: '260709ABC',
+      columnT: new Date(29279, 0, 23)
     });
 
     assert.equal(row.productionDate, null);
