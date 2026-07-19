@@ -9,6 +9,7 @@ const maxWorksheetRows = 2000;
 const maxImportRows = 1000;
 const emptyProductionDateError = 'วันฝนว่าง';
 const invalidProductionDateError = 'วันฝนไม่ถูกต้อง';
+const minimumProductionYear = 2000;
 const lotPackDateFallbackWarning = 'วันฝนอ่านจาก Lot Pack เพราะคอลัมน์ T ว่างหรือสูตรไม่มีค่า cached result ที่ถูกต้อง';
 
 const expectedColumns = [
@@ -156,13 +157,24 @@ function formatDate(date) {
   return `${year}-${month}-${day}`;
 }
 
+function isProductionDateInAllowedRange(date) {
+  if (Number.isNaN(date.getTime())) {
+    return false;
+  }
+
+  const year = date.getFullYear();
+  const maximumProductionYear = new Date().getFullYear() + 1;
+
+  return year >= minimumProductionYear && year <= maximumProductionYear;
+}
+
 function parseProductionDate(value) {
   if (!value) {
     return { value: null, error: emptyProductionDateError };
   }
 
   if (value instanceof Date) {
-    if (!Number.isNaN(value.getTime())) {
+    if (isProductionDateInAllowedRange(value)) {
       return { value: formatDate(value), error: '' };
     }
 
@@ -172,7 +184,7 @@ function parseProductionDate(value) {
   if (typeof value === 'number') {
     const excelDate = new Date(Math.round((value - 25569) * 86400 * 1000));
 
-    if (!Number.isNaN(excelDate.getTime())) {
+    if (isProductionDateInAllowedRange(excelDate)) {
       return { value: formatDate(excelDate), error: '' };
     }
   }
@@ -195,7 +207,7 @@ function parseProductionDate(value) {
     const date = new Date(year, Number(month) - 1, Number(day));
 
     if (
-      !Number.isNaN(date.getTime()) &&
+      isProductionDateInAllowedRange(date) &&
       date.getFullYear() === year &&
       date.getMonth() === Number(month) - 1 &&
       date.getDate() === Number(day)
@@ -212,7 +224,7 @@ function parseProductionDate(value) {
     const date = new Date(year, Number(month) - 1, Number(day));
 
     if (
-      !Number.isNaN(date.getTime()) &&
+      isProductionDateInAllowedRange(date) &&
       date.getFullYear() === year &&
       date.getMonth() === Number(month) - 1 &&
       date.getDate() === Number(day)

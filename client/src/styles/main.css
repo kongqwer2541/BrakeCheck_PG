@@ -1605,18 +1605,31 @@ h2 {
 
 .settings-page {
   display: grid;
-  gap: 14px;
+  gap: 16px;
 }
 
 .settings-tabs {
-  width: fit-content;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  width: min(100%, 1040px);
+  gap: 4px;
+  padding: 5px;
+  border-color: #d6e3ec;
+  background: #f6f9fb;
   box-shadow: none;
+}
+
+.settings-tabs button {
+  min-width: 0;
+  min-height: 38px;
+  padding: 0 12px;
+  white-space: nowrap;
 }
 
 .settings-section {
   display: grid;
-  gap: 12px;
-  padding: 16px;
+  gap: 16px;
+  padding: 20px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
@@ -1653,16 +1666,17 @@ h2 {
 .settings-form-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  grid-template-columns: minmax(220px, 1.4fr) minmax(180px, 1fr) repeat(2, minmax(120px, 0.65fr));
 }
 
 .settings-topic-form {
   display: grid;
-  gap: 12px;
-  padding: 14px;
-  border: 1px solid var(--line);
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid #cedde7;
+  border-top: 3px solid var(--brand-blue);
   border-radius: 8px;
-  background: var(--surface-soft);
+  background: #f7fafc;
 }
 
 .settings-locked-panel {
@@ -1675,7 +1689,55 @@ h2 {
 }
 
 .settings-topic-form .wide-field {
+  grid-column: 1 / -1;
+}
+
+.settings-topic-form .field {
+  gap: 7px;
+}
+
+.settings-topic-form .field > span {
+  color: #17354a;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.settings-topic-form input,
+.settings-topic-form select {
+  min-height: 42px;
+  background: #fff;
+}
+
+.settings-topic-remark-field {
   grid-column: span 2;
+}
+
+.settings-topic-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+
+.settings-topic-form-actions .primary-button {
+  width: auto;
+  min-width: 220px;
+  min-height: 40px;
+  padding-inline: 20px;
+}
+
+.settings-topic-heading {
+  padding-bottom: 14px;
+  border-bottom: 1px solid #e2ebf1;
+}
+
+.settings-topic-heading h2 {
+  color: #17354a;
+}
+
+.settings-topic-count {
+  border: 1px solid #b8e1ca;
+  background: #eaf8f0;
+  color: #176b45;
 }
 
 .settings-toggle {
@@ -1687,8 +1749,33 @@ h2 {
   font-weight: 700;
 }
 
+.settings-topic-toolbar {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 56px;
+  padding: 10px 12px;
+  border: 1px solid #d9e5ed;
+  border-radius: 8px;
+  background: #f8fbfd;
+}
+
+.settings-topic-toolbar .settings-bulk-actions {
+  justify-content: flex-end;
+  margin-left: auto;
+  padding: 0;
+}
+
+.settings-topic-table-wrap {
+  border: 1px solid #d9e5ed;
+  border-radius: 8px;
+  background: #fff;
+}
+
 .topic-management-table {
-  min-width: 1120px;
+  width: 100%;
+  min-width: 1360px;
   border-collapse: separate;
   border-spacing: 0;
 }
@@ -1703,6 +1790,9 @@ h2 {
 }
 
 .topic-management-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   padding: 10px 12px;
   background: #eef6fb;
   color: #17354a;
@@ -1718,6 +1808,14 @@ h2 {
 
 .topic-management-table tbody tr:hover {
   background: #f7fbfe;
+}
+
+.topic-management-table tbody tr:nth-child(even):not(.inactive-row) {
+  background: #fbfdff;
+}
+
+.topic-management-table tbody tr:nth-child(even):not(.inactive-row):hover {
+  background: #f3f9fd;
 }
 
 .topic-management-table .inactive-row:hover {
@@ -1755,7 +1853,7 @@ h2 {
 
 .topic-management-table [data-topic-remark] {
   width: 100%;
-  min-width: 180px;
+  min-width: 360px;
 }
 
 .settings-actions-cell {
@@ -1780,6 +1878,28 @@ h2 {
   border-color: #8f1c14;
   background: #8f1c14;
   color: #fff;
+}
+
+@media (max-width: 1180px) {
+  .settings-tabs {
+    display: flex;
+    flex-wrap: nowrap;
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .settings-tabs button {
+    flex: 0 0 auto;
+  }
+
+  .settings-form-grid {
+    grid-template-columns: repeat(2, minmax(180px, 1fr));
+  }
+
+  .settings-topic-remark-field,
+  .settings-topic-form .wide-field {
+    grid-column: span 2;
+  }
 }
 
 .settings-bulk-actions {
@@ -3202,6 +3322,31 @@ h2 {
   .dimension-topic-item,
   .dimension-section-title {
     grid-template-columns: 1fr;
+  }
+
+  .settings-section {
+    padding: 14px;
+  }
+
+  .settings-topic-remark-field,
+  .settings-topic-form .wide-field {
+    grid-column: 1;
+  }
+
+  .settings-topic-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .settings-topic-toolbar .settings-bulk-actions {
+    justify-content: flex-start;
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .settings-topic-form-actions .primary-button {
+    width: 100%;
+    min-width: 0;
   }
 
   .dimension-section-title {

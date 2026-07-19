@@ -68,6 +68,38 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
+export function requiresDimensionInspectionNote(piecesData) {
+  const topics = Array.isArray(piecesData?.topics) ? piecesData.topics : [];
+  const hasFailResult = topics.some((topic) => (
+    Array.isArray(topic?.rows)
+    && topic.rows.some((row) => (
+      Array.isArray(row?.values)
+      && row.values.some((value) => value === 'fail')
+    ))
+  ));
+  const inspectionNote = String(piecesData?.meta?.inspectionNote || '').trim();
+
+  return hasFailResult && !inspectionNote;
+}
+
+export function sortMeasurementInputsByInspectionOrder(inputs = []) {
+  return Array.from(inputs)
+    .map((input, originalIndex) => ({ input, originalIndex }))
+    .sort((left, right) => {
+      const leftInput = left.input;
+      const rightInput = right.input;
+      const leftTypeOrder = leftInput.dataset.inputType === 'pass_fail' ? 1 : 0;
+      const rightTypeOrder = rightInput.dataset.inputType === 'pass_fail' ? 1 : 0;
+
+      return leftTypeOrder - rightTypeOrder
+        || Number(leftInput.dataset.topicIndex || 0) - Number(rightInput.dataset.topicIndex || 0)
+        || Number(leftInput.dataset.pieceNo || 0) - Number(rightInput.dataset.pieceNo || 0)
+        || Number(leftInput.dataset.inputIndex || 0) - Number(rightInput.dataset.inputIndex || 0)
+        || left.originalIndex - right.originalIndex;
+    })
+    .map(({ input }) => input);
+}
+
 function getStatusClass(status) {
   if (status === 'approved') {
     return 'approved';
@@ -1558,7 +1590,9 @@ export function bindLotInspectionPage({
     form.querySelector(`[name="instrumentCode${index}"]`)
   )).filter(Boolean);
   const measurementInputs = Array.from(form.querySelectorAll('[data-measurement-input]'));
+  const orderedMeasurementInputs = sortMeasurementInputsByInspectionOrder(measurementInputs);
   const missingPanel = form.querySelector('[data-missing-panel]');
+  const noteInput = form.querySelector('[name="inspectionNote"]');
   let hasShownMissingPanel = false;
 
   instrumentInputs.forEach((input) => {
@@ -1623,17 +1657,18 @@ export function bindLotInspectionPage({
       });
   }
 
-  function updateMissingPanel(missingItems = []) {
+  function updateMissingPanel(missingItems = [], noteMissing = false) {
     if (!missingPanel) {
       return;
     }
 
     measurementInputs.forEach((input) => setMissingState(input, false));
     missingItems.forEach(({ input }) => setMissingState(input, true));
+    noteInput?.classList.toggle('is-missing', noteMissing);
 
     missingPanel.replaceChildren();
 
-    if (!missingItems.length) {
+    if (!missingItems.length && !noteMissing) {
       missingPanel.hidden = true;
       return;
     }
@@ -1641,7 +1676,7 @@ export function bindLotInspectionPage({
     missingPanel.hidden = false;
 
     const title = document.createElement('strong');
-    title.textContent = `ยังกรอกไม่ครบ ${missingItems.length} ช่อง`;
+    title.textContent = 'ยังกรอกฟอร์มตรวจมิติไม่ครบ';
 
     const list = document.createElement('ul');
     missingItems.slice(0, 8).forEach((item) => {
@@ -1656,16 +1691,28 @@ export function bindLotInspectionPage({
       list.appendChild(listItem);
     }
 
+    if (noteMissing) {
+      const listItem = document.createElement('li');
+      listItem.textContent = 'หมายเหตุเมื่อมีผลตรวจไม่ผ่าน';
+      list.appendChild(listItem);
+    }
+
     missingPanel.append(title, list);
   }
 
   function showMissingMeasurements() {
     const missingItems = getMissingMeasurementInputs();
+    const noteMissing = requiresDimensionInspectionNote(collectPiecesData());
     hasShownMissingPanel = true;
-    updateMissingPanel(missingItems);
+    updateMissingPanel(missingItems, noteMissing);
 
     if (missingItems.length) {
       focusMeasurementTarget(missingItems[0].input);
+      return false;
+    }
+
+    if (noteMissing) {
+      noteInput?.focus();
       return false;
     }
 
@@ -1688,8 +1735,8 @@ export function bindLotInspectionPage({
   }
 
   function focusNextMeasurementInput(currentInput) {
-    const currentIndex = measurementInputs.indexOf(currentInput);
-    const nextInput = measurementInputs.slice(currentIndex + 1).find((input) => !input.disabled);
+    const currentIndex = orderedMeasurementInputs.indexOf(currentInput);
+    const nextInput = orderedMeasurementInputs.slice(currentIndex + 1).find((input) => !input.disabled);
 
     if (nextInput) {
       focusMeasurementTarget(nextInput);
@@ -1701,14 +1748,20 @@ export function bindLotInspectionPage({
       validateMeasurementInput(input);
 
       if (hasShownMissingPanel) {
-        updateMissingPanel(getMissingMeasurementInputs());
+        updateMissingPanel(
+          getMissingMeasurementInputs(),
+          requiresDimensionInspectionNote(collectPiecesData())
+        );
       }
     });
     input.addEventListener('change', () => {
       validateMeasurementInput(input);
 
       if (hasShownMissingPanel) {
-        updateMissingPanel(getMissingMeasurementInputs());
+        updateMissingPanel(
+          getMissingMeasurementInputs(),
+          requiresDimensionInspectionNote(collectPiecesData())
+        );
       }
     });
     input.addEventListener('keydown', (event) => {
@@ -1744,10 +1797,22 @@ export function bindLotInspectionPage({
       });
       validateMeasurementInput(input);
       if (hasShownMissingPanel) {
-        updateMissingPanel(getMissingMeasurementInputs());
+        updateMissingPanel(
+          getMissingMeasurementInputs(),
+          requiresDimensionInspectionNote(collectPiecesData())
+        );
       }
       focusNextMeasurementInput(input);
     });
+  });
+
+  noteInput?.addEventListener('input', () => {
+    if (hasShownMissingPanel) {
+      updateMissingPanel(
+        getMissingMeasurementInputs(),
+        requiresDimensionInspectionNote(collectPiecesData())
+      );
+    }
   });
 
   function validateMeasurementInputs() {
