@@ -1,12 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
+import { db, postgresDb } from '../config/database.js';
 import {
+  buildExportDimensionExcel,
   buildExportDimensionWorkbookFromRows,
   buildExportDimensionPreviewFromRows,
+  getExportDimensionPreview,
   normalizeExportDimensionLotIds,
   normalizeExportDimensionPreviewFilters
 } from './export-dimension.service.js';
+
+test('dimension export service uses PostgreSQL query APIs', async () => {
+  const source = await readFile(new URL('./export-dimension.service.js', import.meta.url), 'utf8');
+
+  assert.match(source, /import \{ postgresDb \}/);
+  assert.doesNotMatch(source, /\.execute\(|\bdb\./);
+});
 
 const baseRow = {
   id: 1,
@@ -57,6 +68,73 @@ const baseRow = {
     ]
   })
 };
+
+test('export dimension preview uses PostgreSQL filters and escaped search', async (t) => {
+  const originalLegacyExecute = db.execute;
+  const originalQuery = postgresDb.query;
+  const calls = [];
+
+  t.after(() => {
+    db.execute = originalLegacyExecute;
+    postgresDb.query = originalQuery;
+  });
+  db.execute = async () => {
+    throw new Error('Legacy MySQL pool was used.');
+  };
+  postgresDb.query = async (sql, params = []) => {
+    calls.push({ sql, params });
+    return { rows: [baseRow] };
+  };
+
+  const result = await getExportDimensionPreview({
+    model: 'ABC%_\\1',
+    productionStartDate: '2026-06-01',
+    productionEndDate: '2026-06-30',
+    inspectionStartDate: '2026-06-02',
+    inspectionEndDate: '2026-06-03'
+  });
+
+  assert.match(calls[0].sql, /lots\.model_name ILIKE \$1 ESCAPE '\\'/);
+  assert.match(calls[0].sql, /lots\.production_date BETWEEN \$2 AND \$3/);
+  assert.match(calls[0].sql, /dimension_inspections\.inspection_date BETWEEN \$4 AND \$5/);
+  assert.deepEqual(calls[0].params, [
+    '%ABC\\%\\_\\\\1%',
+    '2026-06-01',
+    '2026-06-30',
+    '2026-06-02',
+    '2026-06-03'
+  ]);
+  assert.equal(result.summary.totalLots, 1);
+});
+
+test('dimension export creates PostgreSQL placeholders for selected lot ids', async (t) => {
+  const originalLegacyExecute = db.execute;
+  const originalQuery = postgresDb.query;
+  const calls = [];
+
+  t.after(() => {
+    db.execute = originalLegacyExecute;
+    postgresDb.query = originalQuery;
+  });
+  db.execute = async () => {
+    throw new Error('Legacy MySQL pool was used.');
+  };
+  postgresDb.query = async (sql, params = []) => {
+    calls.push({ sql, params });
+    return {
+      rows: [
+        { ...baseRow, id: 7, lot_number: 'LOT-007' },
+        { ...baseRow, id: 9, lot_number: 'LOT-009' }
+      ]
+    };
+  };
+
+  const result = await buildExportDimensionExcel({ lotIds: [7, 9], topicNames: [] });
+
+  assert.match(calls[0].sql, /lots\.id IN \(\$1, \$2\)/);
+  assert.deepEqual(calls[0].params, [7, 9]);
+  assert.ok(result.buffer.length > 0);
+});
 
 test('export dimension preview requires model or production date filter', () => {
   assert.throws(
@@ -152,7 +230,15 @@ test('export dimension excel requires selected lot ids', () => {
     /Lot ที่เลือกไม่ถูกต้อง/
   );
 
-  assert.deepEqual(normalizeExportDimensionLotIds([1, '2', 2]), [1, 2]);
+  assert.throws(
+    () => normalizeExportDimensionLotIds(['2147483648']),
+    /Lot ที่เลือกไม่ถูกต้อง/
+  );
+
+  assert.deepEqual(
+    normalizeExportDimensionLotIds([1, '2', 2, '2147483647']),
+    [1, 2, 2147483647]
+  );
 });
 
 test('export dimension excel workbook creates raw, skipped, summary, and metadata sheets', () => {

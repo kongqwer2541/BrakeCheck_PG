@@ -1,34 +1,35 @@
-import test, { mock } from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { db } from '../config/database.js';
-import { getDashboardData } from './dashboard.service.js';
+process.env.SESSION_SECRET = 'test_session_secret_at_least_32_chars';
 
-test('dashboard loads a production date range and reports latest date', async () => {
+const { db, postgresDb } = await import('../config/database.js');
+const { getDashboardData } = await import('./dashboard.service.js');
+
+test('dashboard loads a PostgreSQL date range with escaped search', async (t) => {
+  const originalLegacyGetConnection = db.getConnection;
+  const originalConnect = postgresDb.connect;
   const executed = [];
   const connection = {
-    beginTransaction: async () => {},
-    commit: async () => {},
-    rollback: async () => {},
     release: () => {},
-    execute: async (sql, params) => {
+    query: async (sql, params = []) => {
       executed.push({ sql, params });
 
       if (sql.includes('MAX(production_date)')) {
-        return [[{ latest_date: '2026-06-29' }]];
+        return { rows: [{ latest_date: '2026-06-29' }] };
       }
 
       if (sql.includes('COUNT(*) AS total_lots')) {
-        return [[{
+        return { rows: [{
           total_lots: 1,
           completed_lots: 1,
           approved_lots: 0,
           waiting_approve_lots: 1,
           ng_lots: 0
-        }]];
+        }] };
       }
 
-      return [[{
+      if (sql.includes('ORDER BY')) return { rows: [{
         lot_number: '260526003',
         lot_pack_barcode: '260526002',
         lot_packing: '260526-008',
@@ -40,15 +41,26 @@ test('dashboard loads a production date range and reports latest date', async ()
         status: 'waiting_approve',
         import_source: 'excel',
         updated_at: '2026-06-22 10:00:00'
-      }]];
+      }] };
+
+      return { rows: [] };
     }
   };
-  mock.method(db, 'getConnection', async () => connection);
+
+  t.after(() => {
+    db.getConnection = originalLegacyGetConnection;
+    postgresDb.connect = originalConnect;
+  });
+  db.getConnection = async () => {
+    throw new Error('Legacy MySQL pool was used.');
+  };
+  postgresDb.connect = async () => connection;
 
   const result = await getDashboardData({
     startDate: '2026-06-22',
     endDate: '2026-06-24',
     status: 'all',
+    search: 'LOT%_\\1',
     page: 1,
     pageSize: '50'
   });
@@ -56,9 +68,12 @@ test('dashboard loads a production date range and reports latest date', async ()
   const statsQuery = executed.find((item) => item.sql.includes('COUNT(*) AS total_lots'));
   const listQuery = executed.find((item) => item.sql.includes('ORDER BY'));
 
-  assert.match(statsQuery.sql, /production_date BETWEEN \? AND \?/);
-  assert.match(listQuery.sql, /production_date BETWEEN \? AND \?/);
-  assert.deepEqual(statsQuery.params, ['2026-06-22', '2026-06-24']);
+  assert.match(statsQuery.sql, /production_date BETWEEN \$1 AND \$2/);
+  assert.match(statsQuery.sql, /lot_number ILIKE \$3 ESCAPE '\\'/);
+  assert.match(listQuery.sql, /production_date BETWEEN \$1 AND \$2/);
+  assert.deepEqual(statsQuery.params, ['2026-06-22', '2026-06-24', '%LOT\\%\\_\\\\1%']);
+  assert.equal(executed[0].sql, 'BEGIN');
+  assert.equal(executed.at(-1).sql, 'COMMIT');
   assert.equal(result.latestDate, '2026-06-29');
   assert.equal(result.hasNewerDate, true);
   assert.equal(result.filters.startDate, '2026-06-22');
@@ -76,34 +91,41 @@ test('dashboard rejects void status from the public dashboard filter', async () 
   );
 });
 
-test('dashboard keeps date ranges paginated instead of allowing all page size', async () => {
+test('dashboard keeps date ranges paginated instead of allowing all page size', async (t) => {
+  const originalLegacyGetConnection = db.getConnection;
+  const originalConnect = postgresDb.connect;
   const executed = [];
   const connection = {
-    beginTransaction: async () => {},
-    commit: async () => {},
-    rollback: async () => {},
     release: () => {},
-    execute: async (sql, params) => {
+    query: async (sql, params = []) => {
       executed.push({ sql, params });
 
       if (sql.includes('MAX(production_date)')) {
-        return [[{ latest_date: '2026-06-29' }]];
+        return { rows: [{ latest_date: '2026-06-29' }] };
       }
 
       if (sql.includes('COUNT(*) AS total_lots')) {
-        return [[{
+        return { rows: [{
           total_lots: 75,
           completed_lots: 0,
           approved_lots: 0,
           waiting_approve_lots: 0,
           ng_lots: 0
-        }]];
+        }] };
       }
 
-      return [[]];
+      return { rows: [] };
     }
   };
-  mock.method(db, 'getConnection', async () => connection);
+
+  t.after(() => {
+    db.getConnection = originalLegacyGetConnection;
+    postgresDb.connect = originalConnect;
+  });
+  db.getConnection = async () => {
+    throw new Error('Legacy MySQL pool was used.');
+  };
+  postgresDb.connect = async () => connection;
 
   const result = await getDashboardData({
     startDate: '2026-06-22',

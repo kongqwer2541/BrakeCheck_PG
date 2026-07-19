@@ -1,5 +1,5 @@
 import PDFDocument from 'pdfkit';
-import { db } from '../config/database.js';
+import { postgresDb } from '../config/database.js';
 import { getLotApprovalEvidence } from './lot-approval-evidence.service.js';
 import {
   assertPdfThaiFontsAvailable,
@@ -138,6 +138,15 @@ function normalizeSearch(value) {
   return cleanText(value).slice(0, 80);
 }
 
+function escapeLikeSearch(value) {
+  return value.replace(/[\\%_]/g, (matchedText) => `\\${matchedText}`);
+}
+
+function addParameter(params, value) {
+  params.push(value);
+  return `$${params.length}`;
+}
+
 function normalizePage(value) {
   const page = Number(value || 1);
   return Number.isInteger(page) && page > 0 ? page : 1;
@@ -185,32 +194,29 @@ function createReportWhere({ tab, date, search }) {
   const params = [];
 
   if (tab === 'approved') {
-    conditions.push('lots.status = ?');
-    params.push('approved');
+    conditions.push(`lots.status = ${addParameter(params, 'approved')}`);
   } else {
-    conditions.push(`lots.status = ? AND EXISTS (
+    const statusParam = addParameter(params, 'ng');
+    conditions.push(`lots.status = ${statusParam} AND EXISTS (
       SELECT 1
       FROM lot_audit_logs confirmed_ng
       WHERE confirmed_ng.lot_id = lots.id
         AND confirmed_ng.action = 'confirm_ng'
     )`);
-    params.push('ng');
   }
 
   if (date) {
-    conditions.push('lots.production_date = ?');
-    params.push(date);
+    conditions.push(`lots.production_date = ${addParameter(params, date)}`);
   }
 
   if (search) {
+    const searchParam = addParameter(params, `%${escapeLikeSearch(search)}%`);
     conditions.push(`(
-      lots.lot_number LIKE ?
-      OR lots.lot_pack_barcode LIKE ?
-      OR lots.lot_packing LIKE ?
-      OR lots.model_name LIKE ?
+      lots.lot_number ILIKE ${searchParam} ESCAPE '\\'
+      OR lots.lot_pack_barcode ILIKE ${searchParam} ESCAPE '\\'
+      OR lots.lot_packing ILIKE ${searchParam} ESCAPE '\\'
+      OR lots.model_name ILIKE ${searchParam} ESCAPE '\\'
     )`);
-    const keyword = `%${search}%`;
-    params.push(keyword, keyword, keyword, keyword);
   }
 
   return {
@@ -258,7 +264,7 @@ export async function getReportExportLots({ tab, date, search, page, pageSize })
     search: searchText
   });
 
-  const [countRows] = await db.execute(
+  const { rows: countRows } = await postgresDb.query(
     `SELECT COUNT(*) AS total
      FROM lots
      ${where.sql}`,
@@ -273,7 +279,7 @@ export async function getReportExportLots({ tab, date, search, page, pageSize })
   const offset = (safePage - 1) * pageSizeNumber;
   const limitSql = buildReportQueueLimitClause(selectedPageSize, offset);
 
-  const [rows] = await db.execute(
+  const { rows } = await postgresDb.query(
     `SELECT
        lot_number,
        lot_pack_barcode,
@@ -401,7 +407,7 @@ function mapReportDetail(row) {
 }
 
 async function findReportDetailByLotNumber(lotNumber, connection) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT
        lots.id,
        lots.lot_number,
@@ -446,7 +452,7 @@ async function findReportDetailByLotNumber(lotNumber, connection) {
        ON packing_inspections.lot_id = lots.id
      LEFT JOIN users packing_user
        ON packing_user.id = packing_inspections.completed_by
-     WHERE lots.lot_number = ?
+     WHERE lots.lot_number = $1
      LIMIT 1`,
     [lotNumber]
   );
@@ -675,7 +681,7 @@ async function getReadyLotReport(lotNumber) {
   const cleanedLotNumber = validateReportLotNumber(lotNumber);
   let lot = null;
   let evidence = { approved: null, ngConfirmed: null };
-  const connection = await db.getConnection();
+  const connection = await postgresDb.connect();
 
   try {
     lot = await findReportDetailByLotNumber(cleanedLotNumber, connection);
