@@ -1,4 +1,5 @@
-import { db } from '../config/database.js';
+import { postgresDb } from '../config/database.js';
+import { withPostgresTransaction } from '../utils/postgres-transaction.js';
 import { getLotApprovalEvidence } from './lot-approval-evidence.service.js';
 
 const maxTextLength = {
@@ -418,7 +419,7 @@ function getLotStatusSnapshot(lot) {
 }
 
 async function findLotForPacking(lotNumber, connection, lock = false) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT
        id,
        lot_number,
@@ -437,7 +438,7 @@ async function findLotForPacking(lotNumber, connection, lock = false) {
        status,
        sample_count
      FROM lots
-     WHERE lot_number = ?
+     WHERE lot_number = $1
      LIMIT 1
      ${lock ? 'FOR UPDATE' : ''}`,
     [lotNumber]
@@ -447,7 +448,7 @@ async function findLotForPacking(lotNumber, connection, lock = false) {
 }
 
 async function getActivePackingFormConfig(connection) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT
        id,
        topic_name,
@@ -476,8 +477,8 @@ async function getActivePackingFormConfig(connection) {
 }
 
 async function findInspectionByLotId(lotId, connection, lock = false) {
-  const lockSql = lock ? 'FOR UPDATE' : '';
-  const [rows] = await connection.execute(
+  const lockSql = lock ? 'FOR UPDATE OF packing_inspections' : '';
+  const { rows } = await connection.query(
     `SELECT
        packing_inspections.id,
        packing_inspections.status,
@@ -498,7 +499,7 @@ async function findInspectionByLotId(lotId, connection, lock = false) {
        ON updated_user.id = packing_inspections.updated_by
      LEFT JOIN users completed_user
        ON completed_user.id = packing_inspections.completed_by
-     WHERE packing_inspections.lot_id = ?
+     WHERE packing_inspections.lot_id = $1
      LIMIT 1
      ${lockSql}`,
     [lotId]
@@ -508,10 +509,10 @@ async function findInspectionByLotId(lotId, connection, lock = false) {
 }
 
 async function findDimensionProductionCodeByLotId(lotId, connection) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT production_code
      FROM dimension_inspections
-     WHERE lot_id = ?
+     WHERE lot_id = $1
      ORDER BY updated_at DESC, id DESC
      LIMIT 1`,
     [lotId]
@@ -594,9 +595,8 @@ async function resolveCompleteFormConfigSnapshot(currentInspection, connection) 
 
 async function upsertInspection({ lot, input, userId, status, connection }) {
   const completedBy = status === 'completed' ? userId : null;
-  const completedAtSql = status === 'completed' ? 'NOW()' : 'NULL';
 
-  await connection.execute(
+  await connection.query(
     `INSERT INTO packing_inspections (
        lot_id,
        status,
@@ -608,15 +608,18 @@ async function upsertInspection({ lot, input, userId, status, connection }) {
        completed_by,
        completed_at
      )
-     VALUES (?, ?, CURDATE(), ?, ?, ?, ?, ?, ${completedAtSql})
-     ON DUPLICATE KEY UPDATE
-       status = VALUES(status),
-       inspection_date = CURDATE(),
-       form_config_snapshot = VALUES(form_config_snapshot),
-       results_data = VALUES(results_data),
-       updated_by = VALUES(updated_by),
-       completed_by = VALUES(completed_by),
-       completed_at = ${completedAtSql}`,
+     VALUES (
+       $1, $2, CURRENT_DATE, $3, $4, $5, $6, $7,
+       CASE WHEN $2 = 'completed' THEN CURRENT_TIMESTAMP ELSE NULL END
+     )
+     ON CONFLICT (lot_id) DO UPDATE SET
+       status = EXCLUDED.status,
+       inspection_date = EXCLUDED.inspection_date,
+       form_config_snapshot = EXCLUDED.form_config_snapshot,
+       results_data = EXCLUDED.results_data,
+       updated_by = EXCLUDED.updated_by,
+       completed_by = EXCLUDED.completed_by,
+       completed_at = EXCLUDED.completed_at`,
     [
       lot.id,
       status,
@@ -637,7 +640,7 @@ async function insertPackingStatusAuditLog({
   userId,
   connection
 }) {
-  await connection.execute(
+  await connection.query(
     `INSERT INTO lot_audit_logs (
        lot_id,
        action,
@@ -646,7 +649,7 @@ async function insertPackingStatusAuditLog({
        after_data,
        changed_by
      )
-     VALUES (?, 'edit', ?, ?, ?, ?)`,
+     VALUES ($1, 'edit', $2, $3, $4, $5)`,
     [
       lot.id,
       reason,
@@ -670,10 +673,10 @@ async function updateLotStatusForPacking({
   const beforeStatus = lot.status;
   const reason = `ตรวจบรรจุเปลี่ยนสถานะ Lot: ${getLotStatusLabel(beforeStatus)} -> ${getLotStatusLabel(nextStatus)}`;
 
-  await connection.execute(
+  await connection.query(
     `UPDATE lots
-     SET status = ?
-     WHERE id = ?`,
+     SET status = $1
+     WHERE id = $2`,
     [nextStatus, lot.id]
   );
 
@@ -691,17 +694,17 @@ async function updateLotStatusForPacking({
 
 export async function getPackingInspection({ lotNumber }) {
   const cleanedLotNumber = validateLotNumber(lotNumber);
-  const lot = await findLotForPacking(cleanedLotNumber, db);
+  const lot = await findLotForPacking(cleanedLotNumber, postgresDb);
 
   if (!lot) {
     throw createHttpError(404, 'ไม่พบ Lot ที่ต้องการ');
   }
 
-  const inspection = await findInspectionByLotId(lot.id, db);
-  const formConfig = await getActivePackingFormConfig(db);
+  const inspection = await findInspectionByLotId(lot.id, postgresDb);
+  const formConfig = await getActivePackingFormConfig(postgresDb);
   const packingReference = getPackingReferenceFromInspection(inspection)
-    || await resolvePackingReference(lot, db);
-  const approvalEvidence = await getLotApprovalEvidence(lot.id, db);
+    || await resolvePackingReference(lot, postgresDb);
+  const approvalEvidence = await getLotApprovalEvidence(lot.id, postgresDb);
 
   return {
     ok: true,
@@ -740,10 +743,7 @@ export async function completePackingInspection({ lotNumber, input, user }) {
 async function savePackingInspection({ lotNumber, input, user, status, isComplete, message }) {
   const cleanedLotNumber = validateLotNumber(lotNumber);
   const actorUserId = requireActorUser(user);
-  const connection = await db.getConnection();
-
-  try {
-    await connection.beginTransaction();
+  return withPostgresTransaction(postgresDb, async (connection) => {
 
     const lot = await findLotForPacking(cleanedLotNumber, connection, true);
     const currentInspection = lot ? await findInspectionByLotId(lot.id, connection, true) : null;
@@ -790,8 +790,6 @@ async function savePackingInspection({ lotNumber, input, user, status, isComplet
 
     const savedInspection = await findInspectionByLotId(lot.id, connection);
 
-    await connection.commit();
-
     return {
       ok: true,
       message: nextLotStatus === 'ng'
@@ -801,10 +799,5 @@ async function savePackingInspection({ lotNumber, input, user, status, isComplet
       inspection: mapInspection(savedInspection),
       packingReference
     };
-  } catch (error) {
-    await connection.rollback();
-    throw error;
-  } finally {
-    connection.release();
-  }
+  });
 }

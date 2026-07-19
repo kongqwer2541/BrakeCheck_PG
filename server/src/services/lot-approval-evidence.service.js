@@ -13,7 +13,7 @@ export function mapApprovalEvidenceRow(row) {
 }
 
 export async function getLotApprovalEvidence(lotId, connection) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT
        a.action,
        a.reason,
@@ -24,7 +24,7 @@ export async function getLotApprovalEvidence(lotId, connection) {
        u.position AS actor_position
      FROM lot_audit_logs a
      LEFT JOIN users u ON u.id = a.changed_by
-     WHERE a.lot_id = ?
+     WHERE a.lot_id = $1
        AND a.action IN ('approve', 'confirm_ng')
      ORDER BY a.created_at DESC, a.id DESC`,
     [lotId]

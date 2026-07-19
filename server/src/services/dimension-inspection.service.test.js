@@ -1,12 +1,121 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import {
+process.env.SESSION_SECRET = 'test_session_secret_at_least_32_chars';
+
+const { db, postgresDb } = await import('../config/database.js');
+const {
   canEditCompletedDimensionInspection,
+  getDimensionInspection,
+  saveDimensionInspectionDraft,
   validateInstrumentCodes,
   shouldMeasurePiece,
   shouldSkipTopicByWorkType
-} from './dimension-inspection.service.js';
+} = await import('./dimension-inspection.service.js');
+
+test('dimension inspection service uses PostgreSQL transaction and upsert syntax', async () => {
+  const source = await readFile(new URL('./dimension-inspection.service.js', import.meta.url), 'utf8');
+
+  assert.match(source, /import \{ postgresDb \}/);
+  assert.match(source, /withPostgresTransaction/);
+  assert.match(source, /ON CONFLICT \(lot_id\) DO UPDATE/i);
+  assert.doesNotMatch(source, /\.execute\(|ON DUPLICATE KEY|ER_BAD_FIELD_ERROR|ER_NO_SUCH_TABLE|42703/);
+});
+
+test('loads dimension inspection details through PostgreSQL', async (t) => {
+  const originalLegacyExecute = db.execute;
+  const originalQuery = postgresDb.query;
+  const calls = [];
+
+  t.after(() => {
+    db.execute = originalLegacyExecute;
+    postgresDb.query = originalQuery;
+  });
+
+  db.execute = async () => {
+    throw new Error('Legacy MySQL pool was used.');
+  };
+  postgresDb.query = async (sql, params = []) => {
+    calls.push({ sql, params });
+
+    if (/FROM lots/i.test(sql)) {
+      return { rows: [{ id: 7, lot_number: 'LOT-1', quantity: 100, status: 'pending' }] };
+    }
+    if (/dimension_instrument_prefixes/i.test(sql)) {
+      return {
+        rows: Array.from({ length: 5 }, (_, index) => ({ slot_no: index + 1, prefix: 'A-01-' }))
+      };
+    }
+    if (/sampling_rules/i.test(sql)) {
+      return { rows: [{ qty_min: 1, qty_max: null, sample_count: 5 }] };
+    }
+
+    return { rows: [] };
+  };
+
+  const result = await getDimensionInspection({ lotNumber: 'LOT-1' });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.lot.lotNumber, 'LOT-1');
+  assert.equal(calls.some(({ sql }) => sql.includes('?')), false);
+});
+
+test('saves a dimension draft in one PostgreSQL transaction', async (t) => {
+  const originalLegacyGetConnection = db.getConnection;
+  const originalConnect = postgresDb.connect;
+  const calls = [];
+
+  t.after(() => {
+    db.getConnection = originalLegacyGetConnection;
+    postgresDb.connect = originalConnect;
+  });
+
+  db.getConnection = async () => {
+    throw new Error('Legacy MySQL pool was used.');
+  };
+  postgresDb.connect = async () => ({
+    query: async (sql, params = []) => {
+      calls.push({ sql, params });
+
+      if (/FROM lots/i.test(sql)) {
+        return { rows: [{ id: 7, lot_number: 'LOT-1', quantity: 100, sample_count: 5, status: 'pending' }] };
+      }
+      if (/FROM dimension_inspections/i.test(sql)) {
+        if (/FOR UPDATE/i.test(sql)) {
+          return { rows: [] };
+        }
+        return { rows: [{ id: 3, status: 'draft', pieces_data: { topics: [] } }] };
+      }
+      if (/FROM sampling_rules/i.test(sql)) {
+        return { rows: [{ qty_min: 1, qty_max: null, sample_count: 5 }] };
+      }
+      if (/FROM form_config/i.test(sql)) {
+        return { rows: [] };
+      }
+
+      return { rows: [], rowCount: 1 };
+    },
+    release: () => {}
+  });
+
+  const result = await saveDimensionInspectionDraft({
+    lotNumber: 'LOT-1',
+    input: {
+      inspectionDate: '',
+      shift: '',
+      instrumentCodes: ['', '', '', '', ''],
+      piecesData: { topics: [] }
+    },
+    user: { id: 1, role: 'officer', fullName: 'QC Test' }
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(calls[0].sql, 'BEGIN');
+  assert.equal(calls.at(-1).sql, 'COMMIT');
+  assert.ok(calls.some(({ sql }) => /ON CONFLICT \(lot_id\) DO UPDATE/i.test(sql)));
+  assert.equal(calls.some(({ sql }) => sql.includes('?')), false);
+});
 
 test('hole inspection rule skips topics by rule_key without depending on Thai topic name', () => {
   const topic = {
