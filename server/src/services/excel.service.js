@@ -1,4 +1,5 @@
-import { db } from '../config/database.js';
+import { postgresDb } from '../config/database.js';
+import { withPostgresTransaction } from '../utils/postgres-transaction.js';
 import { readExcelPreview } from '../utils/excel-reader.js';
 
 const maxStoredFileNameLength = 255;
@@ -12,6 +13,16 @@ function createHttpError(statusCode, message, details = null) {
   }
 
   return error;
+}
+
+function requireActorUser(user) {
+  const userId = Number(user?.id);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    throw createHttpError(401, 'Session หมดอายุ กรุณาเข้าสู่ระบบใหม่');
+  }
+
+  return userId;
 }
 
 function cleanStoredFileName(fileName) {
@@ -58,6 +69,10 @@ function mapRowError(row) {
   };
 }
 
+function createPostgresPlaceholders(length) {
+  return Array.from({ length }, (_, index) => `$${index + 1}`).join(', ');
+}
+
 async function findExistingLots(lotNumbers) {
   const uniqueLotNumbers = [...new Set(lotNumbers.filter(Boolean))];
 
@@ -65,8 +80,8 @@ async function findExistingLots(lotNumbers) {
     return [];
   }
 
-  const placeholders = uniqueLotNumbers.map(() => '?').join(', ');
-  const [rows] = await db.execute(
+  const placeholders = createPostgresPlaceholders(uniqueLotNumbers.length);
+  const { rows } = await postgresDb.query(
     `SELECT lot_number
      FROM lots
      WHERE lot_number IN (${placeholders})`,
@@ -97,8 +112,8 @@ async function findExistingProductionDates(productionDates) {
     return [];
   }
 
-  const placeholders = uniqueDates.map(() => '?').join(', ');
-  const [rows] = await db.execute(
+  const placeholders = createPostgresPlaceholders(uniqueDates.length);
+  const { rows } = await postgresDb.query(
     `SELECT production_date, COUNT(*) AS lot_count
      FROM lots
      WHERE production_date IN (${placeholders})
@@ -138,11 +153,11 @@ function getUnconfirmedProductionDates(existingProductionDates, confirmedProduct
 }
 
 async function getSampleCount(quantity, connection) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT sample_count
      FROM sampling_rules
-     WHERE qty_min <= ?
-       AND (qty_max IS NULL OR qty_max >= ?)
+     WHERE qty_min <= $1
+       AND (qty_max IS NULL OR qty_max >= $2)
      ORDER BY qty_min DESC
      LIMIT 1`,
     [quantity, quantity]
@@ -155,8 +170,8 @@ async function getSampleCount(quantity, connection) {
   return Number(rows[0].sample_count);
 }
 
-async function createImportBatch({ connection, file, preview, importedRows, skippedRows, user }) {
-  const [result] = await connection.execute(
+async function createImportBatch({ connection, file, preview, importedRows, skippedRows, actorUserId }) {
+  const { rows } = await connection.query(
     `INSERT INTO excel_import_batches (
        original_file_name,
        file_hash,
@@ -168,7 +183,8 @@ async function createImportBatch({ connection, file, preview, importedRows, skip
        skipped_rows,
        uploaded_by
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING id`,
     [
       cleanStoredFileName(file.originalname),
       preview.file.hash,
@@ -178,17 +194,17 @@ async function createImportBatch({ connection, file, preview, importedRows, skip
       preview.summary.totalRows,
       importedRows,
       skippedRows,
-      user?.id || null
+      actorUserId
     ]
   );
 
-  return result.insertId;
+  return rows[0].id;
 }
 
-async function insertLot({ connection, row, user, importBatchId }) {
+async function insertLot({ connection, row, actorUserId, importBatchId }) {
   const sampleCount = await getSampleCount(row.quantity, connection);
 
-  await connection.execute(
+  await connection.query(
     `INSERT INTO lots (
        lot_number,
        lot_pack_barcode,
@@ -212,7 +228,7 @@ async function insertLot({ connection, row, user, importBatchId }) {
        import_batch_id,
        import_source
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, 'excel')`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'pending', $18, $19, 'excel')`,
     [
       row.lotNumber,
       row.lotPackBarcode || null,
@@ -231,7 +247,7 @@ async function insertLot({ connection, row, user, importBatchId }) {
       row.remark1 || null,
       row.remark2 || null,
       row.remark3 || null,
-      user?.id || null,
+      actorUserId,
       importBatchId
     ]
   );
@@ -259,6 +275,7 @@ export async function previewExcelImport({ file }) {
 }
 
 export async function saveExcelImport({ file, user, confirmedProductionDates = [] }) {
+  const actorUserId = requireActorUser(user);
   const preview = await readExcelPreview(file);
   const existingLots = await findExistingLots(preview.rows.map((row) => row.lotNumber));
   const rows = markDuplicateRows(preview.rows, existingLots);
@@ -293,45 +310,37 @@ export async function saveExcelImport({ file, user, confirmedProductionDates = [
     });
   }
 
-  const connection = await db.getConnection();
-
   try {
-    await connection.beginTransaction();
-
-    const importBatchId = await createImportBatch({
-      connection,
-      file,
-      preview,
-      importedRows: rows.length,
-      skippedRows: 0,
-      user
-    });
-
-    for (const row of rows) {
-      await insertLot({ connection, row, user, importBatchId });
-    }
-
-    await connection.commit();
-
-    return {
-      ok: true,
-      message: 'บันทึกข้อมูล Excel สำเร็จ',
-      importBatchId,
-      summary: {
-        ...summary,
+    return await withPostgresTransaction(postgresDb, async (connection) => {
+      const importBatchId = await createImportBatch({
+        connection,
+        file,
+        preview,
         importedRows: rows.length,
-        skippedRows: 0
-      }
-    };
-  } catch (error) {
-    await connection.rollback();
+        skippedRows: 0,
+        actorUserId
+      });
 
-    if (error.code === 'ER_DUP_ENTRY') {
+      for (const row of rows) {
+        await insertLot({ connection, row, actorUserId, importBatchId });
+      }
+
+      return {
+        ok: true,
+        message: 'บันทึกข้อมูล Excel สำเร็จ',
+        importBatchId,
+        summary: {
+          ...summary,
+          importedRows: rows.length,
+          skippedRows: 0
+        }
+      };
+    });
+  } catch (error) {
+    if (error.code === '23505') {
       throw createHttpError(409, 'มี Lot ซ้ำในระบบ กรุณาตรวจสอบไฟล์ Excel อีกครั้ง');
     }
 
     throw error;
-  } finally {
-    connection.release();
   }
 }

@@ -3,7 +3,8 @@ import { access, mkdir, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { db } from '../config/database.js';
+import { postgresDb } from '../config/database.js';
+import { withPostgresTransaction } from '../utils/postgres-transaction.js';
 
 const maxAttachmentSizeBytes = 5 * 1024 * 1024;
 const maxAttachmentsPerLot = 10;
@@ -166,12 +167,14 @@ function mapAttachmentRow(row) {
   };
 }
 
-async function findLotByNumber(lotNumber, connection = db) {
-  const [rows] = await connection.execute(
+async function findLotByNumber(lotNumber, connection = postgresDb, { forUpdate = false } = {}) {
+  const lockClause = forUpdate ? 'FOR UPDATE' : '';
+  const { rows } = await connection.query(
     `SELECT id, lot_number
      FROM lots
-     WHERE lot_number = ?
-     LIMIT 1`,
+     WHERE lot_number = $1
+     LIMIT 1
+     ${lockClause}`,
     [lotNumber]
   );
 
@@ -182,7 +185,7 @@ async function insertAttachmentAudit(connection, { lotId, action, reason, before
   const actorUserId = requireActorUser(user);
   const actorSnapshot = buildActorSnapshot(user);
 
-  await connection.execute(
+  await connection.query(
     `INSERT INTO lot_audit_logs (
        lot_id,
        action,
@@ -193,7 +196,7 @@ async function insertAttachmentAudit(connection, { lotId, action, reason, before
        actor_name_snapshot,
        actor_position_snapshot
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
     [
       lotId,
       action,
@@ -215,7 +218,7 @@ export async function listLotAttachments({ lotNumber }) {
     throw createHttpError(404, 'ไม่พบ Lot ที่ต้องการ');
   }
 
-  const [rows] = await db.execute(
+  const { rows } = await postgresDb.query(
     `SELECT
        a.id,
        l.lot_number,
@@ -228,7 +231,7 @@ export async function listLotAttachments({ lotNumber }) {
      FROM lot_attachments a
      JOIN lots l ON l.id = a.lot_id
      LEFT JOIN users u ON u.id = a.uploaded_by
-     WHERE a.lot_id = ?
+     WHERE a.lot_id = $1
        AND a.deleted_at IS NULL
      ORDER BY a.uploaded_at DESC, a.id DESC`,
     [lot.id]
@@ -244,83 +247,78 @@ export async function uploadLotAttachment({ lotNumber, file, user }) {
   const cleanedLotNumber = cleanLotNumber(lotNumber);
   requireActorUser(user);
   const fileInfo = validateAttachmentFile(file);
-  const connection = await db.getConnection();
   let savedFilePath = '';
 
   try {
-    await connection.beginTransaction();
-    const lot = await findLotByNumber(cleanedLotNumber, connection);
+    await withPostgresTransaction(postgresDb, async (connection) => {
+      const lot = await findLotByNumber(cleanedLotNumber, connection, { forUpdate: true });
 
-    if (!lot) {
-      throw createHttpError(404, 'ไม่พบ Lot ที่ต้องการ');
-    }
+      if (!lot) {
+        throw createHttpError(404, 'ไม่พบ Lot ที่ต้องการ');
+      }
 
-    const [attachmentCountRows] = await connection.execute(
-      `SELECT COUNT(*) AS total
-       FROM lot_attachments
-       WHERE lot_id = ?
-         AND deleted_at IS NULL`,
-      [lot.id]
-    );
-    validateAttachmentCount(Number(attachmentCountRows[0]?.total || 0));
+      const { rows: attachmentCountRows } = await connection.query(
+        `SELECT COUNT(*) AS total
+         FROM lot_attachments
+         WHERE lot_id = $1
+           AND deleted_at IS NULL`,
+        [lot.id]
+      );
+      validateAttachmentCount(Number(attachmentCountRows[0]?.total || 0));
 
-    await mkdir(attachmentRoot, { recursive: true });
-    const storedName = createStoredAttachmentName({
-      lotId: lot.id,
-      originalName: fileInfo.originalName
+      await mkdir(attachmentRoot, { recursive: true });
+      const storedName = createStoredAttachmentName({
+        lotId: lot.id,
+        originalName: fileInfo.originalName
+      });
+      const filePath = path.join(attachmentRoot, storedName);
+      await writeFile(filePath, file.buffer);
+      savedFilePath = filePath;
+
+      const actorUserId = requireActorUser(user);
+      const { rows: createdRows } = await connection.query(
+        `INSERT INTO lot_attachments (
+           lot_id,
+           original_name,
+           stored_name,
+           mime_type,
+           file_size,
+           uploaded_by
+         )
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id`,
+        [
+          lot.id,
+          fileInfo.originalName,
+          storedName,
+          fileInfo.mimeType,
+          file.size,
+          actorUserId
+        ]
+      );
+
+      await insertAttachmentAudit(connection, {
+        lotId: lot.id,
+        action: 'upload_attachment',
+        reason: `แนบไฟล์ ${fileInfo.originalName}`,
+        afterData: {
+          attachmentId: createdRows[0].id,
+          originalName: fileInfo.originalName,
+          fileSize: file.size,
+          mimeType: fileInfo.mimeType
+        },
+        user
+      });
     });
-    const filePath = path.join(attachmentRoot, storedName);
-    await writeFile(filePath, file.buffer);
-    savedFilePath = filePath;
-
-    const actorUserId = requireActorUser(user);
-    const [result] = await connection.execute(
-      `INSERT INTO lot_attachments (
-         lot_id,
-         original_name,
-         stored_name,
-         mime_type,
-         file_size,
-         uploaded_by
-       )
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [
-        lot.id,
-        fileInfo.originalName,
-        storedName,
-        fileInfo.mimeType,
-        file.size,
-        actorUserId
-      ]
-    );
-
-    await insertAttachmentAudit(connection, {
-      lotId: lot.id,
-      action: 'upload_attachment',
-      reason: `แนบไฟล์ ${fileInfo.originalName}`,
-      afterData: {
-        attachmentId: result.insertId,
-        originalName: fileInfo.originalName,
-        fileSize: file.size,
-        mimeType: fileInfo.mimeType
-      },
-      user
-    });
-
-    await connection.commit();
-
-    return listLotAttachments({ lotNumber: cleanedLotNumber });
   } catch (error) {
-    await connection.rollback();
-
     if (savedFilePath) {
       await unlink(savedFilePath).catch(() => {});
     }
 
     throw error;
-  } finally {
-    connection.release();
   }
+
+  return listLotAttachments({ lotNumber: cleanedLotNumber });
 }
 
 export async function deleteLotAttachment({ lotNumber, attachmentId, user }) {
@@ -332,23 +330,20 @@ export async function deleteLotAttachment({ lotNumber, attachmentId, user }) {
   }
 
   const actorUserId = requireActorUser(user);
-  const connection = await db.getConnection();
-
-  try {
-    await connection.beginTransaction();
-
+  await withPostgresTransaction(postgresDb, async (connection) => {
     const lot = await findLotByNumber(cleanedLotNumber, connection);
     if (!lot) {
       throw createHttpError(404, 'ไม่พบ Lot ที่ต้องการ');
     }
 
-    const [rows] = await connection.execute(
+    const { rows } = await connection.query(
       `SELECT id, original_name, mime_type, file_size
        FROM lot_attachments
-       WHERE id = ?
-         AND lot_id = ?
+       WHERE id = $1
+         AND lot_id = $2
          AND deleted_at IS NULL
-       LIMIT 1`,
+       LIMIT 1
+       FOR UPDATE`,
       [cleanedAttachmentId, lot.id]
     );
 
@@ -357,15 +352,19 @@ export async function deleteLotAttachment({ lotNumber, attachmentId, user }) {
       throw createHttpError(404, 'ไม่พบไฟล์แนบที่ต้องการ');
     }
 
-    await connection.execute(
+    const updateResult = await connection.query(
       `UPDATE lot_attachments
        SET deleted_at = CURRENT_TIMESTAMP,
-           deleted_by = ?
-       WHERE id = ?
-         AND lot_id = ?
+           deleted_by = $1
+       WHERE id = $2
+         AND lot_id = $3
          AND deleted_at IS NULL`,
       [actorUserId, cleanedAttachmentId, lot.id]
     );
+
+    if (updateResult.rowCount !== 1) {
+      throw createHttpError(404, 'ไม่พบไฟล์แนบที่ต้องการ');
+    }
 
     await insertAttachmentAudit(connection, {
       lotId: lot.id,
@@ -380,15 +379,9 @@ export async function deleteLotAttachment({ lotNumber, attachmentId, user }) {
       user
     });
 
-    await connection.commit();
+  });
 
-    return listLotAttachments({ lotNumber: cleanedLotNumber });
-  } catch (error) {
-    await connection.rollback();
-    throw error;
-  } finally {
-    connection.release();
-  }
+  return listLotAttachments({ lotNumber: cleanedLotNumber });
 }
 
 export async function getLotAttachmentDownload({ lotNumber, attachmentId }) {
@@ -399,7 +392,7 @@ export async function getLotAttachmentDownload({ lotNumber, attachmentId }) {
     throw createHttpError(400, 'ไฟล์แนบไม่ถูกต้อง');
   }
 
-  const [rows] = await db.execute(
+  const { rows } = await postgresDb.query(
     `SELECT
        a.id,
        a.original_name,
@@ -407,8 +400,8 @@ export async function getLotAttachmentDownload({ lotNumber, attachmentId }) {
        a.mime_type
      FROM lot_attachments a
      JOIN lots l ON l.id = a.lot_id
-     WHERE a.id = ?
-       AND l.lot_number = ?
+     WHERE a.id = $1
+       AND l.lot_number = $2
        AND a.deleted_at IS NULL
      LIMIT 1`,
     [cleanedAttachmentId, cleanedLotNumber]

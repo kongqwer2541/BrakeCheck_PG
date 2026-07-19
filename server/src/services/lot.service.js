@@ -1,4 +1,5 @@
-import { db } from '../config/database.js';
+import { postgresDb } from '../config/database.js';
+import { withPostgresTransaction } from '../utils/postgres-transaction.js';
 import { hasDimensionFailResult } from './dimension-inspection.service.js';
 import { hasPackingFailResult } from './packing-inspection.service.js';
 
@@ -254,11 +255,11 @@ function validateQuantity(value) {
 }
 
 async function getSampleCount(quantity, connection) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT sample_count
      FROM sampling_rules
-     WHERE qty_min <= ?
-       AND (qty_max IS NULL OR qty_max >= ?)
+     WHERE qty_min <= $1
+       AND (qty_max IS NULL OR qty_max >= $2)
      ORDER BY qty_min DESC
      LIMIT 1`,
     [quantity, quantity]
@@ -318,10 +319,10 @@ function normalizeLotUpdate(input = {}) {
 }
 
 async function findLotByNumber(lotNumber, connection) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT id, lot_number
      FROM lots
-     WHERE lot_number = ?
+     WHERE lot_number = $1
      LIMIT 1`,
     [lotNumber]
   );
@@ -330,7 +331,7 @@ async function findLotByNumber(lotNumber, connection) {
 }
 
 async function findLotDetailByNumber(lotNumber, connection) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT
        id,
        lot_number,
@@ -356,7 +357,7 @@ async function findLotDetailByNumber(lotNumber, connection) {
        created_at,
        updated_at
      FROM lots
-     WHERE lot_number = ?
+     WHERE lot_number = $1
      LIMIT 1`,
     [lotNumber]
   );
@@ -365,7 +366,7 @@ async function findLotDetailByNumber(lotNumber, connection) {
 }
 
 async function findLotDetailForUpdate(lotNumber, connection) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT
        id,
        lot_number,
@@ -391,7 +392,7 @@ async function findLotDetailForUpdate(lotNumber, connection) {
        created_at,
        updated_at
      FROM lots
-     WHERE lot_number = ?
+     WHERE lot_number = $1
      LIMIT 1
      FOR UPDATE`,
     [lotNumber]
@@ -401,7 +402,7 @@ async function findLotDetailForUpdate(lotNumber, connection) {
 }
 
 async function findApprovalInspectionStatus(lotId, connection) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT
        d.status AS dimension_status,
        d.pieces_data AS dimension_pieces_data,
@@ -410,7 +411,7 @@ async function findApprovalInspectionStatus(lotId, connection) {
      FROM lots l
      LEFT JOIN dimension_inspections d ON d.lot_id = l.id
      LEFT JOIN packing_inspections p ON p.lot_id = l.id
-     WHERE l.id = ?
+     WHERE l.id = $1
      LIMIT 1`,
     [lotId]
   );
@@ -433,11 +434,13 @@ function requireEditableLot(lot) {
 }
 
 function requireActorUser(user) {
-  if (!user?.id) {
+  const userId = Number(user?.id);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
     throw createHttpError(401, 'Session หมดอายุ กรุณาเข้าสู่ระบบใหม่');
   }
 
-  return user.id;
+  return userId;
 }
 
 function mapLotDetail(row) {
@@ -498,7 +501,7 @@ function mapLotLookupResult(rows, matchType) {
 }
 
 async function findLotLookupRowsByLotPack(lotPackBarcode) {
-  const [rows] = await db.execute(
+  const { rows } = await postgresDb.query(
     `SELECT
        lot_number,
        lot_pack_barcode,
@@ -514,7 +517,7 @@ async function findLotLookupRowsByLotPack(lotPackBarcode) {
        production_date,
        status
      FROM lots
-     WHERE lot_pack_barcode = ?
+     WHERE lot_pack_barcode = $1
      ORDER BY
        production_date DESC,
        lot_number ASC
@@ -526,7 +529,7 @@ async function findLotLookupRowsByLotPack(lotPackBarcode) {
 }
 
 async function findLotLookupRowsByLotNumber(lotNumber) {
-  const [rows] = await db.execute(
+  const { rows } = await postgresDb.query(
     `SELECT
        lot_number,
        lot_pack_barcode,
@@ -542,7 +545,7 @@ async function findLotLookupRowsByLotNumber(lotNumber) {
        production_date,
        status
      FROM lots
-     WHERE lot_number = ?
+     WHERE lot_number = $1
      ORDER BY
        production_date DESC,
        lot_number ASC
@@ -623,11 +626,11 @@ export function requireNoDuplicateConfirmNg(action, existingAuditCount) {
 }
 
 async function countLotAuditAction({ lotId, action, connection }) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT COUNT(*) AS total
      FROM lot_audit_logs
-     WHERE lot_id = ?
-       AND action = ?`,
+     WHERE lot_id = $1
+       AND action = $2`,
     [lotId, action]
   );
 
@@ -635,7 +638,7 @@ async function countLotAuditAction({ lotId, action, connection }) {
 }
 
 async function insertLotAuditLog({ lotId, action, reason, beforeData, afterData, userId, actorSnapshot, connection }) {
-  await connection.execute(
+  await connection.query(
     `INSERT INTO lot_audit_logs (
        lot_id,
        action,
@@ -646,7 +649,7 @@ async function insertLotAuditLog({ lotId, action, reason, beforeData, afterData,
        actor_name_snapshot,
        actor_position_snapshot
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
     [
       lotId,
       action,
@@ -716,22 +719,24 @@ export function buildApprovalQueueLimitClause(pageSize, offset) {
 }
 
 function createApprovalQueueWhere({ tab, date, search }) {
-  const conditions = ['status = ?'];
+  const conditions = ['status = $1'];
   const params = [tab];
 
   if (date) {
-    conditions.push('production_date = ?');
     params.push(date);
+    conditions.push(`production_date = $${params.length}`);
   }
 
   if (search) {
+    const firstSearchParam = params.length + 1;
     conditions.push(`(
-      lot_number LIKE ?
-      OR lot_pack_barcode LIKE ?
-      OR lot_packing LIKE ?
-      OR model_name LIKE ?
+      lot_number ILIKE $${firstSearchParam} ESCAPE '\\'
+      OR lot_pack_barcode ILIKE $${firstSearchParam + 1} ESCAPE '\\'
+      OR lot_packing ILIKE $${firstSearchParam + 2} ESCAPE '\\'
+      OR model_name ILIKE $${firstSearchParam + 3} ESCAPE '\\'
     )`);
-    const likeSearch = `%${search}%`;
+    const escapedSearch = search.replace(/[\\%_]/g, '\\$&');
+    const likeSearch = `%${escapedSearch}%`;
     params.push(likeSearch, likeSearch, likeSearch, likeSearch);
   }
 
@@ -769,7 +774,7 @@ export async function getApprovalQueue({ tab, date, search, page, pageSize }) {
     search: searchText
   });
 
-  const [countRows] = await db.execute(
+  const { rows: countRows } = await postgresDb.query(
     `SELECT COUNT(*) AS total
      FROM lots
      ${where.sql}`,
@@ -782,7 +787,7 @@ export async function getApprovalQueue({ tab, date, search, page, pageSize }) {
   const offset = (safePage - 1) * pageSizeNumber;
   const limitSql = buildApprovalQueueLimitClause(selectedPageSize, offset);
 
-  const [rows] = await db.execute(
+  const { rows } = await postgresDb.query(
     `SELECT
        lot_number,
        lot_pack_barcode,
@@ -808,7 +813,7 @@ export async function getApprovalQueue({ tab, date, search, page, pageSize }) {
     where.params
   );
 
-  const [badgeRows] = await db.execute(
+  const { rows: badgeRows } = await postgresDb.query(
     `SELECT COUNT(*) AS total
      FROM lots
      WHERE status IN ('waiting_approve', 'ng')`
@@ -834,10 +839,7 @@ export async function applyApprovalWorkflowAction({ lotNumber, action, reason, u
   const cleanedLotNumber = validateLotCode(lotNumber, 'Lot', maxTextLength.lotNumber);
   const actorUserId = requireActorUser(user);
   const actorSnapshot = buildAuditActorSnapshot(user);
-  const connection = await db.getConnection();
-
-  try {
-    await connection.beginTransaction();
+  return withPostgresTransaction(postgresDb, async (connection) => {
 
     const currentLot = await findLotDetailForUpdate(cleanedLotNumber, connection);
     if (!currentLot) {
@@ -863,10 +865,10 @@ export async function applyApprovalWorkflowAction({ lotNumber, action, reason, u
 
     const beforeData = getLotSnapshot(currentLot);
 
-    await connection.execute(
+    await connection.query(
       `UPDATE lots
-       SET status = ?
-       WHERE id = ?`,
+       SET status = $1
+       WHERE id = $2`,
       [transition.nextStatus, currentLot.id]
     );
 
@@ -884,19 +886,12 @@ export async function applyApprovalWorkflowAction({ lotNumber, action, reason, u
       connection
     });
 
-    await connection.commit();
-
     return {
       ok: true,
       message: getApprovalWorkflowMessage(transition.action),
       lot: mapLotDetail(updatedLot)
     };
-  } catch (error) {
-    await connection.rollback();
-    throw error;
-  } finally {
-    connection.release();
-  }
+  });
 }
 
 function getApprovalWorkflowMessage(action) {
@@ -912,93 +907,86 @@ function getApprovalWorkflowMessage(action) {
 }
 
 export async function createManualLot({ input, user }) {
+  const actorUserId = requireActorUser(user);
   const lot = normalizeManualLot(input);
-  const connection = await db.getConnection();
-
   try {
-    await connection.beginTransaction();
-
-    const existingLot = await findLotByNumber(lot.lotNumber, connection);
-    if (existingLot) {
-      throw createHttpError(409, 'Lot นี้มีอยู่แล้วในระบบ กรุณาตรวจสอบก่อนบันทึก');
-    }
-
-    const sampleCount = await getSampleCount(lot.quantity, connection);
-
-    await connection.execute(
-      `INSERT INTO lots (
-         lot_number,
-         lot_pack_barcode,
-         lot_packing,
-         model_name,
-         dimension,
-         aci_grade,
-         code,
-         purchase_order,
-         production_date,
-         quantity,
-         sample_count,
-         remark1,
-         remark2,
-         remark3,
-         manual_reason,
-         status,
-         imported_by,
-         import_source
-       )
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 'manual')`,
-      [
-        lot.lotNumber,
-        lot.lotPackBarcode,
-        lot.lotPacking,
-        lot.modelName,
-        lot.dimension,
-        lot.aciGrade,
-        lot.code,
-        lot.purchaseOrder,
-        lot.productionDate,
-        lot.quantity,
-        sampleCount,
-        lot.remark1,
-        lot.remark2,
-        lot.remark3,
-        lot.manualReason,
-        user?.id || null
-      ]
-    );
-
-    await connection.commit();
-
-    return {
-      ok: true,
-      message: 'เพิ่ม Manual Lot สำเร็จ',
-      lot: {
-        lotNumber: lot.lotNumber,
-        lotPackBarcode: lot.lotPackBarcode,
-        lotPacking: lot.lotPacking,
-        productionDate: lot.productionDate,
-        quantity: lot.quantity,
-        sampleCount,
-        importSource: 'manual',
-        status: 'pending'
+    return await withPostgresTransaction(postgresDb, async (connection) => {
+      const existingLot = await findLotByNumber(lot.lotNumber, connection);
+      if (existingLot) {
+        throw createHttpError(409, 'Lot นี้มีอยู่แล้วในระบบ กรุณาตรวจสอบก่อนบันทึก');
       }
-    };
-  } catch (error) {
-    await connection.rollback();
 
-    if (error.code === 'ER_DUP_ENTRY') {
+      const sampleCount = await getSampleCount(lot.quantity, connection);
+
+      await connection.query(
+        `INSERT INTO lots (
+           lot_number,
+           lot_pack_barcode,
+           lot_packing,
+           model_name,
+           dimension,
+           aci_grade,
+           code,
+           purchase_order,
+           production_date,
+           quantity,
+           sample_count,
+           remark1,
+           remark2,
+           remark3,
+           manual_reason,
+           status,
+           imported_by,
+           import_source
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'pending', $16, 'manual')`,
+        [
+          lot.lotNumber,
+          lot.lotPackBarcode,
+          lot.lotPacking,
+          lot.modelName,
+          lot.dimension,
+          lot.aciGrade,
+          lot.code,
+          lot.purchaseOrder,
+          lot.productionDate,
+          lot.quantity,
+          sampleCount,
+          lot.remark1,
+          lot.remark2,
+          lot.remark3,
+          lot.manualReason,
+          actorUserId
+        ]
+      );
+
+      return {
+        ok: true,
+        message: 'เพิ่ม Manual Lot สำเร็จ',
+        lot: {
+          lotNumber: lot.lotNumber,
+          lotPackBarcode: lot.lotPackBarcode,
+          lotPacking: lot.lotPacking,
+          productionDate: lot.productionDate,
+          quantity: lot.quantity,
+          sampleCount,
+          importSource: 'manual',
+          status: 'pending'
+        }
+      };
+    });
+  } catch (error) {
+    if (error.code === '23505') {
       throw createHttpError(409, 'Lot นี้มีอยู่แล้วในระบบ กรุณาตรวจสอบก่อนบันทึก');
     }
 
     throw error;
-  } finally {
-    connection.release();
   }
 }
 
 export async function getLotDetail({ lotNumber }) {
   const cleanedLotNumber = validateLotCode(lotNumber, 'Lot', maxTextLength.lotNumber);
-  const lot = await findLotDetailByNumber(cleanedLotNumber, db);
+  const lot = await findLotDetailByNumber(cleanedLotNumber, postgresDb);
 
   if (!lot) {
     throw createHttpError(404, 'ไม่พบ Lot ที่ต้องการ');
@@ -1043,10 +1031,7 @@ export async function updateLot({ lotNumber, input, user }) {
   const lotUpdate = normalizeLotUpdate(input);
   const actorUserId = requireActorUser(user);
   const actorSnapshot = buildAuditActorSnapshot(user);
-  const connection = await db.getConnection();
-
-  try {
-    await connection.beginTransaction();
+  return withPostgresTransaction(postgresDb, async (connection) => {
 
     const currentLot = await findLotDetailForUpdate(cleanedLotNumber, connection);
     requireEditableLot(currentLot);
@@ -1054,22 +1039,22 @@ export async function updateLot({ lotNumber, input, user }) {
     const sampleCount = await getSampleCount(lotUpdate.quantity, connection);
     const beforeData = getLotSnapshot(currentLot);
 
-    await connection.execute(
+    await connection.query(
       `UPDATE lots
-       SET lot_pack_barcode = ?,
-           lot_packing = ?,
-           model_name = ?,
-           dimension = ?,
-           aci_grade = ?,
-           code = ?,
-           purchase_order = ?,
-           production_date = ?,
-           quantity = ?,
-           sample_count = ?,
-           remark1 = ?,
-           remark2 = ?,
-           remark3 = ?
-       WHERE id = ?`,
+       SET lot_pack_barcode = $1,
+           lot_packing = $2,
+           model_name = $3,
+           dimension = $4,
+           aci_grade = $5,
+           code = $6,
+           purchase_order = $7,
+           production_date = $8,
+           quantity = $9,
+           sample_count = $10,
+           remark1 = $11,
+           remark2 = $12,
+           remark3 = $13
+       WHERE id = $14`,
       [
         lotUpdate.lotPackBarcode,
         lotUpdate.lotPacking,
@@ -1102,19 +1087,12 @@ export async function updateLot({ lotNumber, input, user }) {
       connection
     });
 
-    await connection.commit();
-
     return {
       ok: true,
       message: 'บันทึกการแก้ไข Lot สำเร็จ',
       lot: mapLotDetail(updatedLot)
     };
-  } catch (error) {
-    await connection.rollback();
-    throw error;
-  } finally {
-    connection.release();
-  }
+  });
 }
 
 export async function voidLot({ lotNumber, reason, user }) {
@@ -1122,23 +1100,20 @@ export async function voidLot({ lotNumber, reason, user }) {
   const voidReason = requireText(reason, 'เหตุผลการ Void', maxTextLength.voidReason);
   const actorUserId = requireActorUser(user);
   const actorSnapshot = buildAuditActorSnapshot(user);
-  const connection = await db.getConnection();
-
-  try {
-    await connection.beginTransaction();
+  return withPostgresTransaction(postgresDb, async (connection) => {
 
     const currentLot = await findLotDetailForUpdate(cleanedLotNumber, connection);
     requireEditableLot(currentLot);
 
     const beforeData = getLotSnapshot(currentLot);
 
-    await connection.execute(
+    await connection.query(
       `UPDATE lots
        SET status = 'void',
-           voided_by = ?,
-           voided_at = NOW(),
-           void_reason = ?
-       WHERE id = ?`,
+           voided_by = $1,
+           voided_at = CURRENT_TIMESTAMP,
+           void_reason = $2
+       WHERE id = $3`,
       [
         actorUserId,
         voidReason,
@@ -1160,17 +1135,10 @@ export async function voidLot({ lotNumber, reason, user }) {
       connection
     });
 
-    await connection.commit();
-
     return {
       ok: true,
       message: 'Void Lot สำเร็จ',
       lot: mapLotDetail(updatedLot)
     };
-  } catch (error) {
-    await connection.rollback();
-    throw error;
-  } finally {
-    connection.release();
-  }
+  });
 }
