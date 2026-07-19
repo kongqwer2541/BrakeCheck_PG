@@ -188,7 +188,7 @@ function renderTopicCreateForm(formType, { isBlocked = false } = {}) {
         </label>
         <label class="field">
           <span>จำนวนทศนิยม</span>
-          <input name="decimalPlaces" type="number" min="0" max="4" value="0" ${isBlocked ? 'disabled' : ''} />
+          <input name="decimalPlaces" type="number" min="0" max="3" value="0" ${isBlocked ? 'disabled' : ''} />
         </label>
         <label class="field">
           <span>ตรวจชิ้นที่</span>
@@ -200,7 +200,7 @@ function renderTopicCreateForm(formType, { isBlocked = false } = {}) {
         </label>
         <label class="field" data-custom-pieces-field hidden>
           <span>ระบุชิ้น เช่น 1,3,5 หรือ 1-5</span>
-          <input name="measurePiecesCustom" type="text" maxlength="80" ${isBlocked ? 'disabled' : ''} />
+          <input name="measurePiecesCustom" type="text" maxlength="50" ${isBlocked ? 'disabled' : ''} />
         </label>
         <label class="field">
           <span>กฎพิเศษสำหรับหัวข้อ</span>

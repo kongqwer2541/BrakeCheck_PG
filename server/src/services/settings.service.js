@@ -1,10 +1,14 @@
-import { db } from '../config/database.js';
+import { postgresDb } from '../config/database.js';
+import { withPostgresTransaction } from '../utils/postgres-transaction.js';
 
 const defaultInstrumentPrefixes = ['A-01-', 'A-01-', 'A-07-', 'A-01-', 'A-01-'];
 const settingsMigrationMessage = 'ยังไม่ได้อัปเดตฐานข้อมูลสำหรับ Step 12 กรุณา backup database แล้วรัน migration ของ Step 12 ที่ยังขาด';
 const allowedFormTypes = ['dimension', 'packing'];
 const allowedInputTypes = ['number', 'pass_fail'];
 const allowedRuleKeys = ['', 'hole_inspection'];
+const maxMeasurePiecesLength = 50;
+const topicNameLockTimeoutMs = 5000;
+const topicNameLockRetryDelayMs = 50;
 const maxTextLength = {
   topicName: 120,
   remark: 300,
@@ -141,7 +145,13 @@ function normalizeMeasurePieces(value) {
     numbers.add(pieceNo);
   });
 
-  return Array.from(numbers).sort((a, b) => a - b).join(',');
+  const normalizedValue = Array.from(numbers).sort((a, b) => a - b).join(',');
+
+  if (normalizedValue.length > maxMeasurePiecesLength) {
+    throw createHttpError(400, `ตรวจชิ้นที่ยาวเกิน ${maxMeasurePiecesLength} ตัวอักษร`);
+  }
+
+  return normalizedValue;
 }
 
 function normalizeTopicInput(input = {}, formType) {
@@ -153,7 +163,7 @@ function normalizeTopicInput(input = {}, formType) {
     : 1;
   const decimalPlaces = isPassFail
     ? 0
-    : validateInteger(input.decimalPlaces ?? 0, 'จำนวนทศนิยม', { min: 0, max: 4 });
+    : validateInteger(input.decimalPlaces ?? 0, 'จำนวนทศนิยม', { min: 0, max: 3 });
   const ruleKey = cleanText(input.ruleKey);
 
   if (!allowedRuleKeys.includes(ruleKey)) {
@@ -238,7 +248,7 @@ function normalizeInstrumentPrefixesInput(prefixes) {
 }
 
 export function isSystemSettingsSchemaError(error) {
-  return ['ER_BAD_FIELD_ERROR', 'ER_NO_SUCH_TABLE'].includes(error?.code);
+  return ['42703', '42P01'].includes(error?.code);
 }
 
 function mapFormTopic(row) {
@@ -307,7 +317,7 @@ function mapInstrumentPrefix(row) {
 }
 
 async function getFormTopics(connection) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT
        id,
        form_type,
@@ -332,7 +342,7 @@ async function getFormTopics(connection) {
 }
 
 async function getSamplingRules(connection) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT id, qty_min, qty_max, sample_count
      FROM sampling_rules
      ORDER BY qty_min, id`
@@ -342,7 +352,7 @@ async function getSamplingRules(connection) {
 }
 
 async function getInstrumentPrefixes(connection) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT slot_no, prefix
      FROM dimension_instrument_prefixes
      ORDER BY slot_no`
@@ -359,11 +369,11 @@ async function getInstrumentPrefixes(connection) {
 }
 
 async function requireSettingsAuditTable(connection) {
-  await connection.execute('SELECT id FROM system_setting_audit_logs LIMIT 0');
+  await connection.query('SELECT id FROM system_setting_audit_logs LIMIT 0');
 }
 
 async function getDraftCounts(connection) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT
        (SELECT COUNT(*) FROM dimension_inspections WHERE status = 'draft') AS dimension_draft_count,
        (SELECT COUNT(*) FROM packing_inspections WHERE status = 'draft') AS packing_draft_count`
@@ -389,7 +399,7 @@ async function requireNoInspectionDrafts(connection) {
 }
 
 async function getAuditLogs(connection) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT
        id,
        setting_area,
@@ -412,7 +422,7 @@ async function getAuditLogs(connection) {
 }
 
 async function findTopicById(topicId, connection) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT
        id,
        form_type,
@@ -426,7 +436,7 @@ async function findTopicById(topicId, connection) {
        rule_key,
        is_active
      FROM form_config
-     WHERE id = ?
+     WHERE id = $1
      LIMIT 1`,
     [topicId]
   );
@@ -439,15 +449,15 @@ async function findNameConflicts({ formType, topicName, excludeTopicId = null, c
   let excludeSql = '';
 
   if (excludeTopicId) {
-    excludeSql = 'AND id <> ?';
+    excludeSql = 'AND id <> $3';
     params.push(excludeTopicId);
   }
 
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT id, is_active
      FROM form_config
-     WHERE form_type = ?
-       AND LOWER(TRIM(topic_name)) = ?
+     WHERE form_type = $1
+       AND LOWER(TRIM(topic_name)) = $2
        ${excludeSql}`,
     params
   );
@@ -459,10 +469,10 @@ async function findNameConflicts({ formType, topicName, excludeTopicId = null, c
 }
 
 async function getNextDisplayOrder(formType, connection) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT COALESCE(MAX(display_order), 0) AS max_order
      FROM form_config
-     WHERE form_type = ?`,
+     WHERE form_type = $1`,
     [formType]
   );
 
@@ -473,31 +483,121 @@ function getTopicNameLockKey(formType, topicName) {
   return `settings_topic:${formType}:${topicName.toLowerCase()}`;
 }
 
-async function acquireTopicNameLock({ formType, topicName, connection }) {
-  const [rows] = await connection.execute(
-    'SELECT GET_LOCK(?, 5) AS lock_status',
-    [getTopicNameLockKey(formType, topicName)]
-  );
+function waitForTopicNameLock() {
+  return new Promise((resolve) => setTimeout(resolve, topicNameLockRetryDelayMs));
+}
 
-  if (Number(rows[0]?.lock_status) !== 1) {
-    throw createHttpError(409, 'มีผู้ใช้อื่นกำลังเพิ่มหัวข้อชื่อนี้อยู่ กรุณาลองใหม่อีกครั้ง');
+async function acquireTopicNameLock({ formType, topicName, connection }) {
+  const lockKey = getTopicNameLockKey(formType, topicName);
+  const deadline = Date.now() + topicNameLockTimeoutMs;
+
+  while (true) {
+    const { rows } = await connection.query(
+      'SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS lock_status',
+      [lockKey]
+    );
+
+    if (rows[0]?.lock_status === true) {
+      return;
+    }
+
+    if (Date.now() >= deadline) {
+      throw createHttpError(409, 'มีผู้ใช้อื่นกำลังเพิ่มหัวข้อชื่อนี้อยู่ กรุณาลองใหม่อีกครั้ง');
+    }
+
+    await waitForTopicNameLock();
   }
 }
 
 async function releaseTopicNameLock({ formType, topicName, connection }) {
-  await connection.execute(
-    'SELECT RELEASE_LOCK(?) AS released',
+  await connection.query(
+    'SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS released',
     [getTopicNameLockKey(formType, topicName)]
   );
 }
 
+async function runTopicCreationMutation({ formType, topicName, callback, connection }) {
+  if (connection) {
+    let operationError = null;
+
+    await acquireTopicNameLock({ formType, topicName, connection });
+
+    try {
+      return await callback(connection);
+    } catch (error) {
+      operationError = error;
+      throw error;
+    } finally {
+      try {
+        await releaseTopicNameLock({ formType, topicName, connection });
+      } catch (unlockError) {
+        if (!operationError) {
+          throw unlockError;
+        }
+
+        operationError.unlockError = unlockError;
+      }
+    }
+  }
+
+  const activeConnection = await postgresDb.connect();
+  let transactionStarted = false;
+  let lockAcquired = false;
+  let operationError = null;
+  let releaseError;
+
+  try {
+    await acquireTopicNameLock({ formType, topicName, connection: activeConnection });
+    lockAcquired = true;
+
+    await activeConnection.query('BEGIN');
+    transactionStarted = true;
+
+    const result = await callback(activeConnection);
+
+    await activeConnection.query('COMMIT');
+    transactionStarted = false;
+    return result;
+  } catch (error) {
+    operationError = error;
+
+    if (transactionStarted) {
+      try {
+        await activeConnection.query('ROLLBACK');
+      } catch (rollbackError) {
+        releaseError = rollbackError;
+      }
+    }
+
+    throw error;
+  } finally {
+    if (lockAcquired) {
+      try {
+        await releaseTopicNameLock({ formType, topicName, connection: activeConnection });
+      } catch (unlockError) {
+        releaseError ||= unlockError;
+
+        if (operationError) {
+          operationError.unlockError = unlockError;
+        }
+      }
+    }
+
+    activeConnection.release(releaseError);
+
+    if (releaseError && !operationError) {
+      throw releaseError;
+    }
+  }
+}
+
 async function countOtherActiveTopics({ formType, topicId, connection }) {
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT COUNT(*) AS active_count
      FROM form_config
-     WHERE form_type = ?
+     WHERE form_type = $1
        AND is_active = TRUE
-       AND id <> ?`,
+       AND id <> $2`,
     [formType, topicId]
   );
 
@@ -517,7 +617,7 @@ async function insertSettingsAuditLog({
 }) {
   const userId = requireActorUser(user);
 
-  await connection.execute(
+  await connection.query(
     `INSERT INTO system_setting_audit_logs (
        setting_area,
        action,
@@ -530,7 +630,7 @@ async function insertSettingsAuditLog({
        actor_name_snapshot,
        actor_position_snapshot
      )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       settingArea,
       action,
@@ -551,22 +651,10 @@ async function runSettingsMutation(callback, connection) {
     return callback(connection);
   }
 
-  const dbConnection = await db.getConnection();
-
-  try {
-    await dbConnection.beginTransaction();
-    const result = await callback(dbConnection);
-    await dbConnection.commit();
-    return result;
-  } catch (error) {
-    await dbConnection.rollback();
-    throw error;
-  } finally {
-    dbConnection.release();
-  }
+  return withPostgresTransaction(postgresDb, callback);
 }
 
-export async function getSystemSettings(connection = db) {
+export async function getSystemSettings(connection = postgresDb) {
   try {
     await requireSettingsAuditTable(connection);
 
@@ -600,12 +688,12 @@ export async function updateSamplingRules({
 
     const beforeRules = await getSamplingRules(activeConnection);
 
-    await activeConnection.execute('DELETE FROM sampling_rules');
+    await activeConnection.query('DELETE FROM sampling_rules');
 
     for (const rule of normalizedRules) {
-      await activeConnection.execute(
+      await activeConnection.query(
         `INSERT INTO sampling_rules (qty_min, qty_max, sample_count)
-         VALUES (?, ?, ?)`,
+         VALUES ($1, $2, $3)`,
         [rule.qtyMin, rule.qtyMax, rule.sampleCount]
       );
     }
@@ -647,10 +735,11 @@ export async function updateInstrumentPrefixes({
     const beforePrefixes = await getInstrumentPrefixes(activeConnection);
 
     for (const item of normalizedPrefixes) {
-      await activeConnection.execute(
+      await activeConnection.query(
         `INSERT INTO dimension_instrument_prefixes (slot_no, prefix)
-         VALUES (?, ?)
-         ON DUPLICATE KEY UPDATE prefix = VALUES(prefix), updated_at = CURRENT_TIMESTAMP`,
+         VALUES ($1, $2)
+         ON CONFLICT (slot_no) DO UPDATE
+         SET prefix = EXCLUDED.prefix, updated_at = CURRENT_TIMESTAMP`,
         [item.slotNo, item.prefix]
       );
     }
@@ -700,7 +789,7 @@ export async function createInspectionTopic({
     }
 
     const displayOrder = await getNextDisplayOrder(normalizedFormType, activeConnection);
-    const [result] = await activeConnection.execute(
+    const { rows: insertedRows } = await activeConnection.query(
       `INSERT INTO form_config (
          form_type,
          topic_name,
@@ -713,7 +802,8 @@ export async function createInspectionTopic({
          remark,
          is_active
        )
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE)
+       RETURNING id`,
       [
         normalizedFormType,
         normalizedInput.topicName,
@@ -727,7 +817,7 @@ export async function createInspectionTopic({
       ]
     );
 
-    const topic = await findTopicById(result.insertId, activeConnection);
+    const topic = await findTopicById(insertedRows[0].id, activeConnection);
 
     await insertSettingsAuditLog({
       connection: activeConnection,
@@ -748,57 +838,12 @@ export async function createInspectionTopic({
     };
   }
 
-  if (connection) {
-    await acquireTopicNameLock({
-      formType: normalizedFormType,
-      topicName: normalizedInput.topicName,
-      connection
-    });
-
-    try {
-      return await createWithConnection(connection);
-    } finally {
-      await releaseTopicNameLock({
-        formType: normalizedFormType,
-        topicName: normalizedInput.topicName,
-        connection
-      });
-    }
-  }
-
-  const dbConnection = await db.getConnection();
-  let lockAcquired = false;
-  let transactionStarted = false;
-
-  try {
-    await acquireTopicNameLock({
-      formType: normalizedFormType,
-      topicName: normalizedInput.topicName,
-      connection: dbConnection
-    });
-    lockAcquired = true;
-
-    await dbConnection.beginTransaction();
-    transactionStarted = true;
-    const result = await createWithConnection(dbConnection);
-    await dbConnection.commit();
-    transactionStarted = false;
-    return result;
-  } catch (error) {
-    if (transactionStarted) {
-      await dbConnection.rollback();
-    }
-    throw error;
-  } finally {
-    if (lockAcquired) {
-      await releaseTopicNameLock({
-        formType: normalizedFormType,
-        topicName: normalizedInput.topicName,
-        connection: dbConnection
-      });
-    }
-    dbConnection.release();
-  }
+  return runTopicCreationMutation({
+    formType: normalizedFormType,
+    topicName: normalizedInput.topicName,
+    callback: createWithConnection,
+    connection
+  });
 }
 
 export async function updateInspectionTopicDisplay({
@@ -819,11 +864,11 @@ export async function updateInspectionTopicDisplay({
       throw createHttpError(404, 'ไม่พบหัวข้อที่ต้องการแก้ไข');
     }
 
-    await activeConnection.execute(
+    await activeConnection.query(
       `UPDATE form_config
-       SET display_order = ?,
-           remark = ?
-       WHERE id = ?`,
+       SET display_order = $1,
+           remark = $2
+       WHERE id = $3`,
       [normalizedInput.displayOrder, normalizedInput.remark || null, id]
     );
 
@@ -917,10 +962,10 @@ export async function deactivateInspectionTopic({
       throw createHttpError(409, 'ต้องเหลือหัวข้อที่ใช้งานอย่างน้อย 1 หัวข้อในฟอร์มนี้');
     }
 
-    await activeConnection.execute(
+    await activeConnection.query(
       `UPDATE form_config
        SET is_active = FALSE
-       WHERE id = ?`,
+       WHERE id = $1`,
       [id]
     );
 
