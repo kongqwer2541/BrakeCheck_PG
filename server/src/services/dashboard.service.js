@@ -1,4 +1,5 @@
-import { db } from '../config/database.js';
+import { postgresDb } from '../config/database.js';
+import { withPostgresTransaction } from '../utils/postgres-transaction.js';
 
 const allowedStatusFilters = ['all', 'pending', 'waiting', 'in_progress', 'need_fix', 'waiting_approve', 'approved', 'ng'];
 const maxSearchLength = 80;
@@ -107,9 +108,16 @@ function escapeLikeSearch(value) {
   return value.replace(/[\\%_]/g, (matchedText) => `\\${matchedText}`);
 }
 
+function addParameter(params, value) {
+  params.push(value);
+  return `$${params.length}`;
+}
+
 function createWhereClause({ dateRange, status, search }) {
-  const conditions = ['production_date BETWEEN ? AND ?'];
-  const params = [dateRange.startDate, dateRange.endDate];
+  const params = [];
+  const startDateParam = addParameter(params, dateRange.startDate);
+  const endDateParam = addParameter(params, dateRange.endDate);
+  const conditions = [`production_date BETWEEN ${startDateParam} AND ${endDateParam}`];
 
   if (status === 'waiting' || status === 'pending') {
     conditions.push("status IN ('pending', 'waiting_pack')");
@@ -118,18 +126,16 @@ function createWhereClause({ dateRange, status, search }) {
   } else if (status === 'all') {
     conditions.push("status <> 'void'");
   } else if (status !== 'all') {
-    conditions.push('status = ?');
-    params.push(status);
+    conditions.push(`status = ${addParameter(params, status)}`);
   }
 
   if (search) {
-    const escapedSearch = escapeLikeSearch(search);
+    const searchParam = addParameter(params, `%${escapeLikeSearch(search)}%`);
     conditions.push(`(
-      lot_number LIKE ? ESCAPE '\\\\'
-      OR lot_pack_barcode LIKE ? ESCAPE '\\\\'
-      OR lot_packing LIKE ? ESCAPE '\\\\'
+      lot_number ILIKE ${searchParam} ESCAPE '\\'
+      OR lot_pack_barcode ILIKE ${searchParam} ESCAPE '\\'
+      OR lot_packing ILIKE ${searchParam} ESCAPE '\\'
     )`);
-    params.push(`%${escapedSearch}%`, `%${escapedSearch}%`, `%${escapedSearch}%`);
   }
 
   return {
@@ -168,8 +174,8 @@ function mapLot(row) {
   };
 }
 
-async function getLatestDashboardDate(connection = db) {
-  const [rows] = await connection.execute(
+async function getLatestDashboardDate(connection = postgresDb) {
+  const { rows } = await connection.query(
     `SELECT MAX(production_date) AS latest_date
      FROM lots
      WHERE status <> 'void'`
@@ -178,10 +184,10 @@ async function getLatestDashboardDate(connection = db) {
   return toDateText(rows[0]?.latest_date);
 }
 
-async function getStats({ dateRange, status, search, connection = db }) {
+async function getStats({ dateRange, status, search, connection = postgresDb }) {
   const where = createWhereClause({ dateRange, status, search });
 
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT
        COUNT(*) AS total_lots,
        SUM(CASE WHEN status IN ('waiting_pack', 'waiting_approve', 'approved', 'ng') THEN 1 ELSE 0 END) AS completed_lots,
@@ -204,12 +210,12 @@ async function getStats({ dateRange, status, search, connection = db }) {
   };
 }
 
-async function getLots({ dateRange, status, search, pageSize, page, connection = db }) {
+async function getLots({ dateRange, status, search, pageSize, page, connection = postgresDb }) {
   const where = createWhereClause({ dateRange, status, search });
   const offset = (page - 1) * pageSize;
   const limitSql = `LIMIT ${pageSize} OFFSET ${offset}`;
 
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT
        lot_number,
        lot_pack_barcode,
@@ -246,11 +252,7 @@ export async function getDashboardData({
   const searchText = cleanSearch(search);
   const selectedPageSize = normalizePageSize(pageSize);
   const requestedPage = normalizePage(page);
-  const connection = await db.getConnection();
-
-  try {
-    await connection.beginTransaction();
-
+  return withPostgresTransaction(postgresDb, async (connection) => {
     const latestDate = await getLatestDashboardDate(connection);
     const stats = await getStats({
       dateRange,
@@ -269,8 +271,6 @@ export async function getDashboardData({
       page: currentPage,
       connection
     });
-
-    await connection.commit();
 
     return {
       ok: true,
@@ -293,10 +293,5 @@ export async function getDashboardData({
         totalPages
       }
     };
-  } catch (error) {
-    await connection.rollback();
-    throw error;
-  } finally {
-    connection.release();
-  }
+  });
 }

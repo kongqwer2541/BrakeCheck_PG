@@ -1,10 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
 import {
   getResultsLots,
   validateResultsTab
 } from './results.service.js';
+
+test('results service uses PostgreSQL query APIs', async () => {
+  const source = await readFile(new URL('./results.service.js', import.meta.url), 'utf8');
+
+  assert.match(source, /import \{ postgresDb \}/);
+  assert.doesNotMatch(source, /\.execute\(|\blots\.status = \?/);
+});
 
 test('results tab allows only completed result groups', () => {
   assert.equal(validateResultsTab(''), 'approved');
@@ -16,14 +24,14 @@ test('results tab allows only completed result groups', () => {
 test('results list returns only completed approved lots with approval evidence', async () => {
   const executed = [];
   const connection = {
-    execute: async (sql, params) => {
+    query: async (sql, params = []) => {
       executed.push({ sql, params });
 
       if (sql.includes('COUNT(*)')) {
-        return [[{ total_items: 1 }]];
+        return { rows: [{ total_items: 1 }] };
       }
 
-      return [[{
+      return { rows: [{
         lot_number: 'L-APP-1',
         lot_pack_barcode: 'PACK-1',
         lot_packing: 'PROD-1',
@@ -35,7 +43,7 @@ test('results list returns only completed approved lots with approval evidence',
         status: 'approved',
         attachment_count: 2,
         completed_at: '2026-06-23 08:30:00'
-      }]];
+      }] };
     }
   };
 
@@ -50,14 +58,14 @@ test('results list returns only completed approved lots with approval evidence',
 
   const countQuery = executed.find((item) => item.sql.includes('COUNT(*)'));
   const listQuery = executed.find((item) => item.sql.includes('ORDER BY'));
-  assert.match(countQuery.sql, /lots\.status = \?/);
-  assert.match(countQuery.sql, /action = \?/);
+  assert.match(countQuery.sql, /lots\.status = \$1/);
+  assert.match(countQuery.sql, /action = \$4/);
   assert.doesNotMatch(countQuery.sql, /action = 'approve'/);
   assert.doesNotMatch(listQuery.sql, /action = 'approve'/);
   assert.match(countQuery.sql, /dimension_inspections\.status = 'completed'/);
   assert.match(countQuery.sql, /packing_inspections\.status = 'completed'/);
   assert.deepEqual(countQuery.params, ['approved', '2026-06-22', '2026-06-22', 'approve']);
-  assert.deepEqual(listQuery.params, ['approve', 'approved', '2026-06-22', '2026-06-22', 'approve']);
+  assert.deepEqual(listQuery.params, ['approved', '2026-06-22', '2026-06-22', 'approve']);
   assert.equal(result.items[0].lotNumber, 'L-APP-1');
   assert.equal(result.items[0].completedAt, '2026-06-23 08:30:00');
   assert.equal(result.summary.totalItems, 1);
@@ -66,19 +74,19 @@ test('results list returns only completed approved lots with approval evidence',
 test('results attachment count ignores deleted attachments', async () => {
   const executed = [];
   const connection = {
-    execute: async (sql, params) => {
+    query: async (sql, params = []) => {
       executed.push({ sql, params });
 
       if (sql.includes('MAX(lots.production_date)')) {
-        return [[{ latest_date: '2026-06-22' }]];
+        return { rows: [{ latest_date: '2026-06-22' }] };
       }
 
       if (sql.includes('COUNT(*)')) {
-        return [[{ total_items: 1 }]];
+        return { rows: [{ total_items: 1 }] };
       }
 
       if (sql.includes('COUNT(lot_attachments.id)')) {
-        return [[{
+        return { rows: [{
           lot_number: 'L-APP-ATTACH',
           lot_pack_barcode: 'PACK-ATTACH',
           lot_packing: 'PROD-ATTACH',
@@ -90,10 +98,10 @@ test('results attachment count ignores deleted attachments', async () => {
           status: 'approved',
           attachment_count: 2,
           completed_at: '2026-06-23 08:30:00'
-        }]];
+        }] };
       }
 
-      return [[{ approved_count: 1, confirmed_ng_count: 0 }]];
+      return { rows: [{ approved_count: 1, confirmed_ng_count: 0 }] };
     }
   };
 
@@ -113,9 +121,9 @@ test('results attachment count ignores deleted attachments', async () => {
 test('results confirmed NG tab requires confirm_ng evidence', async () => {
   const executed = [];
   const connection = {
-    execute: async (sql, params) => {
+    query: async (sql, params = []) => {
       executed.push({ sql, params });
-      return [[{ total_items: 0 }]];
+      return { rows: [{ total_items: 0 }] };
     }
   };
 
@@ -127,25 +135,25 @@ test('results confirmed NG tab requires confirm_ng evidence', async () => {
 
   const countQuery = executed.find((item) => item.sql.includes('COUNT(*)'));
   const listQuery = executed.find((item) => item.sql.includes('ORDER BY'));
-  assert.match(countQuery.sql, /lots\.status = \?/);
-  assert.match(countQuery.sql, /action = \?/);
+  assert.match(countQuery.sql, /lots\.status = \$1/);
+  assert.match(countQuery.sql, /action = \$2/);
   assert.doesNotMatch(countQuery.sql, /action = 'confirm_ng'/);
   assert.doesNotMatch(listQuery.sql, /action = 'confirm_ng'/);
   assert.deepEqual(countQuery.params, ['ng', 'confirm_ng']);
-  assert.deepEqual(listQuery.params, ['confirm_ng', 'ng', 'confirm_ng']);
+  assert.deepEqual(listQuery.params, ['ng', 'confirm_ng']);
 });
 
 test('results keeps all-dates view paginated instead of allowing all page size', async () => {
   const executed = [];
   const connection = {
-    execute: async (sql, params) => {
+    query: async (sql, params = []) => {
       executed.push({ sql, params });
 
       if (sql.includes('COUNT(*)')) {
-        return [[{ total_items: 75 }]];
+        return { rows: [{ total_items: 75 }] };
       }
 
-      return [[]];
+      return { rows: [] };
     }
   };
 

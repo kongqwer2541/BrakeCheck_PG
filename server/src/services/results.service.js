@@ -1,4 +1,4 @@
-import { db } from '../config/database.js';
+import { postgresDb } from '../config/database.js';
 
 const defaultPageSize = 50;
 const resultTabs = ['approved', 'confirmed_ng'];
@@ -103,61 +103,65 @@ function escapeLikeSearch(value) {
   return value.replace(/[\\%_]/g, (matchedText) => `\\${matchedText}`);
 }
 
+function addParameter(params, value) {
+  params.push(value);
+  return `$${params.length}`;
+}
+
 function buildLimitClause(pageSize, offset) {
   if (pageSize === 'all') return '';
   return `LIMIT ${Number(pageSize) || defaultPageSize} OFFSET ${Number(offset) || 0}`;
 }
 
 function buildResultsWhere({ tab, dateRange, search }) {
-  const base = buildResultsBaseWhere({ dateRange, search });
-  const conditions = ['lots.status = ?', ...base.conditions];
-  const params = [tab === 'confirmed_ng' ? 'ng' : 'approved', ...base.params];
+  const params = [];
+  const statusParam = addParameter(params, tab === 'confirmed_ng' ? 'ng' : 'approved');
+  const base = buildResultsBaseWhere({ dateRange, search }, params);
+  const conditions = [`lots.status = ${statusParam}`, ...base.conditions];
   const action = tab === 'confirmed_ng' ? 'confirm_ng' : 'approve';
+  const actionParam = addParameter(params, action);
 
   conditions.push(`EXISTS (
     SELECT 1
     FROM lot_audit_logs evidence
     WHERE evidence.lot_id = lots.id
-      AND evidence.action = ?
+      AND evidence.action = ${actionParam}
   )`);
-  params.push(action);
 
   return {
     sql: `WHERE ${conditions.join(' AND ')}`,
     params,
-    action
+    actionParam
   };
 }
 
-function buildResultsBaseWhere({ dateRange, search }) {
+function buildResultsBaseWhere({ dateRange, search }, params = []) {
   const conditions = [
     "dimension_inspections.status = 'completed'",
     "packing_inspections.status = 'completed'"
   ];
-  const params = [];
-
   if (dateRange) {
-    conditions.push('lots.production_date BETWEEN ? AND ?');
-    params.push(dateRange.startDate, dateRange.endDate);
+    const startDateParam = addParameter(params, dateRange.startDate);
+    const endDateParam = addParameter(params, dateRange.endDate);
+    conditions.push(`lots.production_date BETWEEN ${startDateParam} AND ${endDateParam}`);
   }
 
   if (search) {
-    const keyword = `%${escapeLikeSearch(search)}%`;
+    const searchParam = addParameter(params, `%${escapeLikeSearch(search)}%`);
     conditions.push(`(
-      lots.lot_number LIKE ? ESCAPE '\\\\'
-      OR lots.lot_pack_barcode LIKE ? ESCAPE '\\\\'
-      OR lots.lot_packing LIKE ? ESCAPE '\\\\'
-      OR lots.model_name LIKE ? ESCAPE '\\\\'
-      OR lots.dimension LIKE ? ESCAPE '\\\\'
+      lots.lot_number ILIKE ${searchParam} ESCAPE '\\'
+      OR lots.lot_pack_barcode ILIKE ${searchParam} ESCAPE '\\'
+      OR lots.lot_packing ILIKE ${searchParam} ESCAPE '\\'
+      OR lots.model_name ILIKE ${searchParam} ESCAPE '\\'
+      OR lots.dimension ILIKE ${searchParam} ESCAPE '\\'
     )`);
-    params.push(keyword, keyword, keyword, keyword, keyword);
   }
 
   return { conditions, params };
 }
 
-async function getLatestResultsDate(connection = db) {
-  const [rows] = await connection.execute(
+async function getLatestResultsDate(connection = postgresDb) {
+  const { rows } = await connection.query(
     `SELECT MAX(lots.production_date) AS latest_date
      FROM lots
      INNER JOIN dimension_inspections ON dimension_inspections.lot_id = lots.id
@@ -184,9 +188,9 @@ async function getLatestResultsDate(connection = db) {
   return toDateText(rows[0]?.latest_date);
 }
 
-async function getResultCounts({ dateRange, search, connection = db }) {
+async function getResultCounts({ dateRange, search, connection = postgresDb }) {
   const base = buildResultsBaseWhere({ dateRange, search });
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT
        SUM(CASE WHEN lots.status = 'approved' AND EXISTS (
          SELECT 1 FROM lot_audit_logs approved_logs
@@ -236,7 +240,7 @@ export async function getResultsLots({
   search,
   page,
   pageSize,
-  connection = db
+  connection = postgresDb
 }) {
   const selectedTab = validateResultsTab(tab);
   const latestDate = await getLatestResultsDate(connection);
@@ -249,7 +253,7 @@ export async function getResultsLots({
   const selectedPageSize = normalizePageSize(pageSize);
   const where = buildResultsWhere({ tab: selectedTab, dateRange, search: searchText });
 
-  const [countRows] = await connection.execute(
+  const { rows: countRows } = await connection.query(
     `SELECT COUNT(*) AS total_items
      FROM lots
      INNER JOIN dimension_inspections ON dimension_inspections.lot_id = lots.id
@@ -265,7 +269,7 @@ export async function getResultsLots({
   const offset = selectedPageSize === 'all' ? 0 : (safePage - 1) * pageSizeNumber;
   const limitSql = buildLimitClause(selectedPageSize, offset);
 
-  const [rows] = await connection.execute(
+  const { rows } = await connection.query(
     `SELECT
        lots.lot_number,
        lots.lot_pack_barcode,
@@ -284,7 +288,7 @@ export async function getResultsLots({
      INNER JOIN (
        SELECT lot_id, MAX(created_at) AS completed_at
        FROM lot_audit_logs
-       WHERE action = ?
+       WHERE action = ${where.actionParam}
        GROUP BY lot_id
      ) completed_evidence ON completed_evidence.lot_id = lots.id
      LEFT JOIN lot_attachments ON lot_attachments.lot_id = lots.id
@@ -293,7 +297,7 @@ export async function getResultsLots({
      GROUP BY lots.id, completed_evidence.completed_at
      ORDER BY lots.production_date DESC, completed_evidence.completed_at DESC, lots.lot_number ASC
      ${limitSql}`,
-    [where.action, ...where.params]
+    where.params
   );
 
   return {

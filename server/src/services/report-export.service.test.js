@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { inflateSync } from 'node:zlib';
 
-import { db } from '../config/database.js';
+import { db, postgresDb } from '../config/database.js';
 import {
   assertReportExportAllLimit,
   assertReportReadyForExport,
@@ -19,6 +20,13 @@ import {
   validateReportLotNumber,
   validateReportExportTab
 } from './report-export.service.js';
+
+test('report export service uses PostgreSQL query APIs', async () => {
+  const source = await readFile(new URL('./report-export.service.js', import.meta.url), 'utf8');
+
+  assert.match(source, /import \{ postgresDb \}/);
+  assert.doesNotMatch(source, /\.execute\(|\bdb\./);
+});
 
 function inflatePdfContentStreams(buffer) {
   const text = buffer.toString('latin1');
@@ -85,7 +93,7 @@ test('report export tab defaults to approved', () => {
   assert.throws(() => validateReportExportTab('ng'), /แท็บส่งออกไม่ถูกต้อง/);
 });
 
-test('report export limit clause uses concrete numbers for mysql compatibility', () => {
+test('report export limit clause uses validated concrete numbers', () => {
   assert.equal(buildReportQueueLimitClause(50, 0), 'LIMIT 50 OFFSET 0');
   assert.equal(buildReportQueueLimitClause(50, 50), 'LIMIT 50 OFFSET 50');
   assert.equal(buildReportQueueLimitClause('all', 0), '');
@@ -116,13 +124,52 @@ test('report export rejects impossible production dates before querying', async 
   );
 });
 
+test('report export queue uses PostgreSQL parameters and escaped search', async (t) => {
+  const originalLegacyExecute = db.execute;
+  const originalQuery = postgresDb.query;
+  const calls = [];
+
+  t.after(() => {
+    db.execute = originalLegacyExecute;
+    postgresDb.query = originalQuery;
+  });
+  db.execute = async () => {
+    throw new Error('Legacy MySQL pool was used.');
+  };
+  postgresDb.query = async (sql, params = []) => {
+    calls.push({ sql, params });
+    if (/COUNT\(\*\)/i.test(sql)) return { rows: [{ total: 1 }] };
+    return { rows: [{ lot_number: 'LOT-1', status: 'approved' }] };
+  };
+
+  const result = await getReportExportLots({
+    tab: 'approved',
+    date: '2026-07-18',
+    search: 'LOT%_\\1',
+    page: 1,
+    pageSize: 50
+  });
+
+  const countQuery = calls.find(({ sql }) => /COUNT\(\*\)/i.test(sql));
+  assert.match(countQuery.sql, /lots\.status = \$1/);
+  assert.match(countQuery.sql, /lots\.production_date = \$2/);
+  assert.match(countQuery.sql, /lots\.lot_number ILIKE \$3 ESCAPE '\\'/);
+  assert.deepEqual(countQuery.params, ['approved', '2026-07-18', '%LOT\\%\\_\\\\1%']);
+  assert.equal(result.items[0].lotNumber, 'LOT-1');
+});
+
 test('report pdf export fails clearly when the Thai font is missing before querying data', async () => {
   const originalThaiFontPath = process.env.PDF_THAI_FONT_PATH;
   const originalGetConnection = db.getConnection;
+  const originalConnect = postgresDb.connect;
   let queried = false;
 
   process.env.PDF_THAI_FONT_PATH = 'Z:\\missing\\brakecheck-thai-font.ttf';
   db.getConnection = async () => {
+    queried = true;
+    throw new Error('Database should not be queried when PDF Thai font is missing');
+  };
+  postgresDb.connect = async () => {
     queried = true;
     throw new Error('Database should not be queried when PDF Thai font is missing');
   };
@@ -144,11 +191,13 @@ test('report pdf export fails clearly when the Thai font is missing before query
       process.env.PDF_THAI_FONT_PATH = originalThaiFontPath;
     }
     db.getConnection = originalGetConnection;
+    postgresDb.connect = originalConnect;
   }
 });
 
 test('report pdf export creates a pdf file from completed snapshot data', async () => {
   const originalGetConnection = db.getConnection;
+  const originalConnect = postgresDb.connect;
   let released = false;
   const lotRow = {
     id: 1,
@@ -213,19 +262,19 @@ test('report pdf export creates a pdf file from completed snapshot data', async 
     packing_completed_by_position: 'QC'
   };
   const fakeConnection = {
-    execute: async (sql) => {
+    query: async (sql) => {
       if (sql.includes('FROM lots')) {
-        return [[lotRow]];
+        return { rows: [lotRow] };
       }
 
       if (sql.includes('FROM lot_audit_logs')) {
-        return [[{
+        return { rows: [{
           action: 'approve',
           reason: 'ผ่าน',
           created_at: '2026-06-20T04:00:00.000Z',
           actor_name_snapshot: 'Head User',
           actor_position_snapshot: 'Head'
-        }]];
+        }] };
       }
 
       throw new Error(`Unexpected query: ${sql}`);
@@ -235,7 +284,10 @@ test('report pdf export creates a pdf file from completed snapshot data', async 
     }
   };
 
-  db.getConnection = async () => fakeConnection;
+  db.getConnection = async () => {
+    throw new Error('Legacy MySQL pool was used.');
+  };
+  postgresDb.connect = async () => fakeConnection;
 
   try {
     const report = await buildLotReportPdf({ lotNumber: 'LOT-PDF-1' });
@@ -254,11 +306,13 @@ test('report pdf export creates a pdf file from completed snapshot data', async 
     assert.equal(released, true);
   } finally {
     db.getConnection = originalGetConnection;
+    postgresDb.connect = originalConnect;
   }
 });
 
 test('report pdf keeps approval evidence title and rows on the same page', async () => {
   const originalGetConnection = db.getConnection;
+  const originalConnect = postgresDb.connect;
   const longNote = '1151511515151515151515115115151 '.repeat(5);
   const dimensionTopics = Array.from({ length: 8 }, (_, index) => ({
     id: index + 1,
@@ -334,19 +388,19 @@ test('report pdf keeps approval evidence title and rows on the same page', async
     packing_completed_by_position: 'QC'
   };
   const fakeConnection = {
-    execute: async (sql) => {
+    query: async (sql) => {
       if (sql.includes('FROM lots')) {
-        return [[lotRow]];
+        return { rows: [lotRow] };
       }
 
       if (sql.includes('FROM lot_audit_logs')) {
-        return [[{
+        return { rows: [{
           action: 'approve',
           reason: 'อนุมัติ Lot',
           created_at: '2026-06-20T04:00:00.000Z',
           actor_name_snapshot: 'Head User',
           actor_position_snapshot: 'Head'
-        }]];
+        }] };
       }
 
       throw new Error(`Unexpected query: ${sql}`);
@@ -354,7 +408,10 @@ test('report pdf keeps approval evidence title and rows on the same page', async
     release: () => {}
   };
 
-  db.getConnection = async () => fakeConnection;
+  db.getConnection = async () => {
+    throw new Error('Legacy MySQL pool was used.');
+  };
+  postgresDb.connect = async () => fakeConnection;
 
   try {
     const report = await buildLotReportPdf({ lotNumber: 'LOT-SPLIT-1' });
@@ -364,6 +421,7 @@ test('report pdf keeps approval evidence title and rows on the same page', async
     assert.equal(pageHasSectionTitle(lastPage), true);
   } finally {
     db.getConnection = originalGetConnection;
+    postgresDb.connect = originalConnect;
   }
 });
 

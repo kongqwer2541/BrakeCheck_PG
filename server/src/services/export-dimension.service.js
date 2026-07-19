@@ -1,9 +1,10 @@
 import ExcelJS from 'exceljs';
 
-import { db } from '../config/database.js';
+import { postgresDb } from '../config/database.js';
 
 const maxModelSearchLength = 200;
 const minModelSearchLengthWithoutProductionDate = 3;
+const maxPostgresInteger = 2147483647;
 const maxTopicNameLength = 120;
 const maxPreviewLots = 500;
 const maxExportMeasurementPoints = 50000;
@@ -150,6 +151,11 @@ function escapeLikeSearch(value) {
   return value.replace(/[\\%_]/g, (matchedText) => `\\${matchedText}`);
 }
 
+function addParameter(params, value) {
+  params.push(value);
+  return `$${params.length}`;
+}
+
 function normalizeTopicNames(value) {
   const rawValues = Array.isArray(value) ? value : String(value || '').split(',');
   const topicNames = rawValues
@@ -166,7 +172,9 @@ export function normalizeExportDimensionLotIds(value) {
 
   const parsedLotIds = value.map((item) => Number(item));
 
-  if (parsedLotIds.some((item) => !Number.isInteger(item) || item <= 0)) {
+  if (parsedLotIds.some((item) => (
+    !Number.isSafeInteger(item) || item <= 0 || item > maxPostgresInteger
+  ))) {
     throw createHttpError(400, 'รายการ Lot ที่เลือกไม่ถูกต้อง');
   }
 
@@ -230,19 +238,27 @@ function buildPreviewWhere(filters) {
   const params = [];
 
   if (filters.modelSearch) {
-    const likeText = `%${escapeLikeSearch(filters.modelSearch)}%`;
-    conditions.push("(lots.model_name LIKE ? ESCAPE '\\\\' OR lots.dimension LIKE ? ESCAPE '\\\\')");
-    params.push(likeText, likeText);
+    const searchParameter = addParameter(
+      params,
+      `%${escapeLikeSearch(filters.modelSearch)}%`
+    );
+    conditions.push(
+      `(lots.model_name ILIKE ${searchParameter} ESCAPE '\\' OR lots.dimension ILIKE ${searchParameter} ESCAPE '\\')`
+    );
   }
 
   if (filters.productionDateRange) {
-    conditions.push('lots.production_date BETWEEN ? AND ?');
-    params.push(filters.productionDateRange.startDate, filters.productionDateRange.endDate);
+    const startDateParameter = addParameter(params, filters.productionDateRange.startDate);
+    const endDateParameter = addParameter(params, filters.productionDateRange.endDate);
+    conditions.push(`lots.production_date BETWEEN ${startDateParameter} AND ${endDateParameter}`);
   }
 
   if (filters.inspectionDateRange) {
-    conditions.push('dimension_inspections.inspection_date BETWEEN ? AND ?');
-    params.push(filters.inspectionDateRange.startDate, filters.inspectionDateRange.endDate);
+    const startDateParameter = addParameter(params, filters.inspectionDateRange.startDate);
+    const endDateParameter = addParameter(params, filters.inspectionDateRange.endDate);
+    conditions.push(
+      `dimension_inspections.inspection_date BETWEEN ${startDateParameter} AND ${endDateParameter}`
+    );
   }
 
   return {
@@ -744,7 +760,7 @@ function assertPreviewLotLimit(rowCount) {
 export async function getExportDimensionPreview(query) {
   const filters = normalizeExportDimensionPreviewFilters(query);
   const where = buildPreviewWhere(filters);
-  const [rows] = await db.execute(
+  const { rows } = await postgresDb.query(
     `SELECT
        lots.id,
        lots.lot_number,
@@ -779,8 +795,8 @@ export async function getExportDimensionPreview(query) {
 }
 
 async function findExportDimensionRowsByLotIds(lotIds) {
-  const placeholders = lotIds.map(() => '?').join(', ');
-  const [rows] = await db.execute(
+  const placeholders = lotIds.map((_, index) => `$${index + 1}`).join(', ');
+  const { rows } = await postgresDb.query(
     `SELECT
        lots.id,
        lots.lot_number,

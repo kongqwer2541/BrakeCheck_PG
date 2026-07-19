@@ -1,4 +1,4 @@
-import { db } from '../config/database.js';
+import { postgresDb } from '../config/database.js';
 
 const maxSearchLength = 80;
 const defaultHistoryRows = 50;
@@ -203,6 +203,11 @@ function escapeLikeSearch(value) {
   return value.replace(/[\\%_]/g, (matchedText) => `\\${matchedText}`);
 }
 
+function addParameter(params, value) {
+  params.push(value);
+  return `$${params.length}`;
+}
+
 function toDateText(value) {
   if (!value) {
     return '-';
@@ -267,31 +272,22 @@ function createLotWhere({ selectedDate, status, search }) {
   const params = [];
 
   if (selectedDate) {
-    conditions.push('l.production_date = ?');
-    params.push(selectedDate);
+    conditions.push(`l.production_date = ${addParameter(params, selectedDate)}`);
   }
 
   if (status !== 'all') {
-    conditions.push('l.status = ?');
-    params.push(status);
+    conditions.push(`l.status = ${addParameter(params, status)}`);
   }
 
   if (search) {
-    const escapedSearch = escapeLikeSearch(search);
+    const searchParam = addParameter(params, `%${escapeLikeSearch(search)}%`);
     conditions.push(`(
-      l.lot_number LIKE ? ESCAPE '\\\\'
-      OR l.lot_pack_barcode LIKE ? ESCAPE '\\\\'
-      OR l.lot_packing LIKE ? ESCAPE '\\\\'
-      OR l.purchase_order LIKE ? ESCAPE '\\\\'
-      OR l.model_name LIKE ? ESCAPE '\\\\'
+      l.lot_number ILIKE ${searchParam} ESCAPE '\\'
+      OR l.lot_pack_barcode ILIKE ${searchParam} ESCAPE '\\'
+      OR l.lot_packing ILIKE ${searchParam} ESCAPE '\\'
+      OR l.purchase_order ILIKE ${searchParam} ESCAPE '\\'
+      OR l.model_name ILIKE ${searchParam} ESCAPE '\\'
     )`);
-    params.push(
-      `%${escapedSearch}%`,
-      `%${escapedSearch}%`,
-      `%${escapedSearch}%`,
-      `%${escapedSearch}%`,
-      `%${escapedSearch}%`
-    );
   }
 
   return {
@@ -305,14 +301,12 @@ function createImportWhere({ selectedDate, search }) {
   const params = [];
 
   if (selectedDate) {
-    conditions.push('DATE(b.uploaded_at) = ?');
-    params.push(selectedDate);
+    conditions.push(`DATE(b.uploaded_at) = ${addParameter(params, selectedDate)}`);
   }
 
   if (search) {
-    const escapedSearch = escapeLikeSearch(search);
-    conditions.push('b.original_file_name LIKE ? ESCAPE \'\\\\\'');
-    params.push(`%${escapedSearch}%`);
+    const searchParam = addParameter(params, `%${escapeLikeSearch(search)}%`);
+    conditions.push(`b.original_file_name ILIKE ${searchParam} ESCAPE '\\'`);
   }
 
   return {
@@ -326,29 +320,21 @@ function createAuditWhere({ selectedDate, action, search }) {
   const params = [];
 
   if (selectedDate) {
-    conditions.push('DATE(a.created_at) = ?');
-    params.push(selectedDate);
+    conditions.push(`DATE(a.created_at) = ${addParameter(params, selectedDate)}`);
   }
 
   if (action !== 'all') {
-    conditions.push('a.action = ?');
-    params.push(action);
+    conditions.push(`a.action = ${addParameter(params, action)}`);
   }
 
   if (search) {
-    const escapedSearch = escapeLikeSearch(search);
+    const searchParam = addParameter(params, `%${escapeLikeSearch(search)}%`);
     conditions.push(`(
-      l.lot_number LIKE ? ESCAPE '\\\\'
-      OR l.lot_pack_barcode LIKE ? ESCAPE '\\\\'
-      OR l.lot_packing LIKE ? ESCAPE '\\\\'
-      OR a.reason LIKE ? ESCAPE '\\\\'
+      l.lot_number ILIKE ${searchParam} ESCAPE '\\'
+      OR l.lot_pack_barcode ILIKE ${searchParam} ESCAPE '\\'
+      OR l.lot_packing ILIKE ${searchParam} ESCAPE '\\'
+      OR a.reason ILIKE ${searchParam} ESCAPE '\\'
     )`);
-    params.push(
-      `%${escapedSearch}%`,
-      `%${escapedSearch}%`,
-      `%${escapedSearch}%`,
-      `%${escapedSearch}%`
-    );
   }
 
   return {
@@ -419,7 +405,7 @@ export async function getLotHistory({ date, status, search, page, pageSize }) {
     search: searchText
   });
 
-  const [countRows] = await db.execute(
+  const { rows: countRows } = await postgresDb.query(
     `SELECT COUNT(*) AS total
      FROM lots l
      ${where.sql}`,
@@ -433,7 +419,7 @@ export async function getLotHistory({ date, status, search, page, pageSize }) {
     requestedPage
   });
 
-  const [rows] = await db.execute(
+  const { rows } = await postgresDb.query(
     `SELECT
        l.lot_number,
        l.lot_pack_barcode,
@@ -476,7 +462,7 @@ export async function getImportHistory({ date, search, page, pageSize }) {
   const requestedPage = normalizePage(page);
   const where = createImportWhere({ selectedDate, search: searchText });
 
-  const [countRows] = await db.execute(
+  const { rows: countRows } = await postgresDb.query(
     `SELECT COUNT(*) AS total
      FROM excel_import_batches b
      ${where.sql}`,
@@ -490,7 +476,7 @@ export async function getImportHistory({ date, search, page, pageSize }) {
     requestedPage
   });
 
-  const [rows] = await db.execute(
+  const { rows } = await postgresDb.query(
     `SELECT
        b.id,
        b.original_file_name,
@@ -533,7 +519,7 @@ export async function getAuditHistory({ date, action, search, page, pageSize }) 
     search: searchText
   });
 
-  const [countRows] = await db.execute(
+  const { rows: countRows } = await postgresDb.query(
     `SELECT COUNT(*) AS total
      FROM lot_audit_logs a
      INNER JOIN lots l ON l.id = a.lot_id
@@ -548,7 +534,7 @@ export async function getAuditHistory({ date, action, search, page, pageSize }) 
     requestedPage
   });
 
-  const [rows] = await db.execute(
+  const { rows } = await postgresDb.query(
     `SELECT
        a.id,
        a.action,
