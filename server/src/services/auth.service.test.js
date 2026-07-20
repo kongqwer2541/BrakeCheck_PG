@@ -5,7 +5,7 @@ import test from 'node:test';
 process.env.SESSION_SECRET = 'test_session_secret_at_least_32_chars';
 
 const { postgresDb } = await import('../config/database.js');
-const { changePassword, getCurrentUser, login } = await import('./auth.service.js');
+const { changePassword, getCurrentUser, login, logout } = await import('./auth.service.js');
 
 function databaseUser(overrides = {}) {
   return {
@@ -85,6 +85,32 @@ test('changes a password in one PostgreSQL transaction', async (t) => {
   assert.deepEqual(clientCalls[2].params, ['password_change', 7]);
   assert.match(clientCalls[3].sql, /^COMMIT$/i);
   assert.equal(released, true);
+});
+
+test('logout revokes only the current session', async (t) => {
+  const originalQuery = postgresDb.query;
+  let executedSql = '';
+  let executedParams = [];
+
+  t.after(() => {
+    postgresDb.query = originalQuery;
+  });
+
+  postgresDb.query = async (sql, params) => {
+    executedSql = sql;
+    executedParams = params;
+    return { rows: [], rowCount: 1 };
+  };
+
+  const result = await logout({
+    userId: 7,
+    tokenId: 'current-session-id'
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(executedSql, /UPDATE auth_sessions/i);
+  assert.match(executedSql, /token_id = \$2[\s\S]*user_id = \$3/i);
+  assert.deepEqual(executedParams, ['logout', 'current-session-id', 7]);
 });
 
 test('rejects a missing login body before querying the database', async (t) => {
