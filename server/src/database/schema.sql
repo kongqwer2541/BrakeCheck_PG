@@ -98,7 +98,7 @@ CREATE TABLE public.user_audit_logs (
   detail TEXT NULL,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT chk_user_audit_action
-    CHECK (action IN ('create_user', 'update_user', 'reset_password')),
+    CHECK (action IN ('create_user', 'update_user', 'reset_password', 'change_password')),
   CONSTRAINT fk_user_audit_actor
     FOREIGN KEY (actor_user_id) REFERENCES public.users(id)
     ON UPDATE CASCADE

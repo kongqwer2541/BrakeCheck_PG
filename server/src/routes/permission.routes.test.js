@@ -23,6 +23,30 @@ const [
 ]);
 
 const knownRoles = ['head', 'assistant', 'officer'];
+const managerRoles = ['head', 'assistant'];
+const lotRoutePermissions = [
+  { path: '/lookup/by-lot-pack', method: 'get', roles: knownRoles },
+  { path: '/approval-queue', method: 'get', roles: managerRoles },
+  { path: '/manual', method: 'post', roles: managerRoles },
+  { path: '/:lotNumber/attachments', method: 'get', roles: knownRoles },
+  { path: '/:lotNumber/attachments', method: 'post', roles: knownRoles },
+  { path: '/:lotNumber/attachments/:attachmentId/download', method: 'get', roles: knownRoles },
+  { path: '/:lotNumber/attachments/:attachmentId', method: 'delete', roles: managerRoles },
+  { path: '/:lotNumber/dimension-inspection', method: 'get', roles: knownRoles },
+  { path: '/:lotNumber/dimension-inspection/draft', method: 'post', roles: knownRoles },
+  { path: '/:lotNumber/dimension-inspection/complete', method: 'post', roles: knownRoles },
+  { path: '/:lotNumber/packing-inspection', method: 'get', roles: knownRoles },
+  { path: '/:lotNumber/packing-inspection/draft', method: 'post', roles: knownRoles },
+  { path: '/:lotNumber/packing-inspection/complete', method: 'post', roles: knownRoles },
+  { path: '/:lotNumber', method: 'get', roles: managerRoles },
+  { path: '/:lotNumber', method: 'put', roles: managerRoles },
+  { path: '/:lotNumber/void', method: 'post', roles: managerRoles },
+  { path: '/:lotNumber/approve', method: 'post', roles: managerRoles },
+  { path: '/:lotNumber/cancel-approval', method: 'post', roles: managerRoles },
+  { path: '/:lotNumber/send-back', method: 'post', roles: managerRoles },
+  { path: '/:lotNumber/review-ng', method: 'post', roles: managerRoles },
+  { path: '/:lotNumber/confirm-ng', method: 'post', roles: managerRoles }
+];
 
 function getGlobalRoleGuard(router) {
   const middlewareLayers = router.stack.filter((layer) => !layer.route);
@@ -72,14 +96,20 @@ test('protects critical backend routes with the approved role matrix', () => {
     getRouteRoleGuard(authRouter, '/sessions/retention-status', 'get', 1),
     ['head']
   );
-  assertAllowedRoles(
-    getRouteRoleGuard(lotRouter, '/approval-queue', 'get'),
-    ['head', 'assistant']
-  );
-  assertAllowedRoles(
-    getRouteRoleGuard(lotRouter, '/:lotNumber/dimension-inspection/draft', 'post'),
-    knownRoles
-  );
+
+  const configuredLotRoutes = lotRouter.stack
+    .filter((layer) => layer.route)
+    .map((layer) => `${Object.keys(layer.route.methods)[0]} ${layer.route.path}`)
+    .sort();
+  const testedLotRoutes = lotRoutePermissions
+    .map(({ method, path }) => `${method} ${path}`)
+    .sort();
+
+  assert.deepEqual(testedLotRoutes, configuredLotRoutes);
+
+  for (const { path, method, roles } of lotRoutePermissions) {
+    assertAllowedRoles(getRouteRoleGuard(lotRouter, path, method), roles);
+  }
 });
 
 test('keeps frontend page permissions aligned with the approved role matrix', async () => {

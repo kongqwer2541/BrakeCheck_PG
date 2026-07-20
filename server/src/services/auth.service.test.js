@@ -306,7 +306,7 @@ test('creates a session for valid credentials and does not expose the password h
   assert.equal(sessionCall.params[1], 7);
 });
 
-test('returns the same generic error for suspended and locked accounts', async (t) => {
+test('keeps the generic error for suspended accounts and wrong passwords on locked accounts', async (t) => {
   const originalQuery = postgresDb.query;
   const genericMessage = 'รหัสพนักงานหรือรหัสผ่านไม่ถูกต้อง';
 
@@ -336,6 +336,38 @@ test('returns the same generic error for suspended and locked accounts', async (
       (error) => error.statusCode === 401 && error.message === genericMessage
     );
   }
+});
+
+test('tells a locked user to wait or contact an administrator only when the password is correct', async (t) => {
+  const originalQuery = postgresDb.query;
+  const password = 'CorrectPass123!';
+  const passwordHash = await bcrypt.hash(password, 4);
+
+  t.after(() => {
+    postgresDb.query = originalQuery;
+  });
+
+  postgresDb.query = async (sql) => {
+    if (/FROM users[\s\S]*employee_code = \$1/i.test(sql)) {
+      return {
+        rows: [databaseUser({
+          password_hash: passwordHash,
+          failed_login_count: 5,
+          locked_until: new Date(Date.now() + 15 * 60 * 1000)
+        })]
+      };
+    }
+
+    throw new Error('A locked account must not update data or create a session');
+  };
+
+  await assert.rejects(
+    () => login({ employeeCode: '12345678', password }),
+    (error) => (
+      error.statusCode === 401
+      && error.message === 'บัญชีถูกล็อกชั่วคราว กรุณารอ 15 นาทีหรือติดต่อผู้ดูแลระบบ'
+    )
+  );
 });
 
 test('locks the account on the fifth failed login but returns a generic error', async (t) => {
