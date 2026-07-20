@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import bcrypt from 'bcrypt';
 import test from 'node:test';
 
 process.env.SESSION_SECRET = 'test_session_secret_at_least_32_chars';
@@ -248,7 +249,7 @@ test('resets a password and revokes existing sessions in one transaction', async
     }
   });
 
-  await resetUserPassword({
+  const result = await resetUserPassword({
     userId: 9,
     actorUserId: 1,
     temporaryPassword: 'ReplacementPass123!'
@@ -256,12 +257,75 @@ test('resets a password and revokes existing sessions in one transaction', async
 
   assert.match(clientCalls[0].sql, /^BEGIN$/i);
   assert.match(clientCalls[1].sql, /UPDATE users[\s\S]*password_hash = \$1/i);
+  assert.match(clientCalls[1].sql, /must_change_password = TRUE/i);
+  assert.match(clientCalls[1].sql, /failed_login_count = 0/i);
+  assert.match(clientCalls[1].sql, /locked_until = NULL/i);
   assert.equal(clientCalls[1].params[1], 9);
+  assert.notEqual(clientCalls[1].params[0], 'ReplacementPass123!');
+  assert.equal(await bcrypt.compare('ReplacementPass123!', clientCalls[1].params[0]), true);
+  assert.equal(result.user.mustChangePassword, true);
   assert.match(clientCalls[2].sql, /UPDATE auth_sessions/i);
   assert.deepEqual(clientCalls[2].params, ['password_reset', 9]);
   assert.match(clientCalls[3].sql, /FROM users[\s\S]*WHERE id = \$1/i);
   assert.match(clientCalls[4].sql, /^\s*INSERT INTO user_audit_logs/i);
   assert.deepEqual(clientCalls[4].params.slice(0, 3), [1, 9, 'reset_password']);
+  assert.doesNotMatch(JSON.stringify(clientCalls[4].params), /ReplacementPass123!/);
+  assert.equal(JSON.stringify(clientCalls[4].params).includes(clientCalls[1].params[0]), false);
   assert.match(clientCalls[5].sql, /^COMMIT$/i);
+  assert.equal(released, true);
+});
+
+test('rolls back a password reset when its audit record cannot be saved', async (t) => {
+  const originalQuery = postgresDb.query;
+  const originalConnect = postgresDb.connect;
+  const clientCalls = [];
+  let released = false;
+  const user = {
+    id: 9,
+    employee_code: '12345678',
+    full_name: 'Test User',
+    position: 'QC',
+    role: 'officer',
+    status: 'active',
+    must_change_password: true,
+    failed_login_count: 0,
+    locked_until: null,
+    created_at: new Date('2026-01-01T00:00:00Z'),
+    updated_at: new Date('2026-01-01T00:00:00Z')
+  };
+
+  t.after(() => {
+    postgresDb.query = originalQuery;
+    postgresDb.connect = originalConnect;
+  });
+
+  postgresDb.query = async () => ({ rows: [user] });
+  postgresDb.connect = async () => ({
+    query: async (sql, params = []) => {
+      clientCalls.push({ sql, params });
+      if (/FROM users[\s\S]*WHERE id = \$1/i.test(sql)) {
+        return { rows: [user] };
+      }
+      if (/^\s*INSERT INTO user_audit_logs/i.test(sql)) {
+        throw new Error('audit unavailable');
+      }
+      return { rows: [], rowCount: 1 };
+    },
+    release: () => {
+      released = true;
+    }
+  });
+
+  await assert.rejects(
+    () => resetUserPassword({
+      userId: 9,
+      actorUserId: 1,
+      temporaryPassword: 'ReplacementPass123!'
+    }),
+    /audit unavailable/
+  );
+
+  assert.ok(clientCalls.some(({ sql }) => /^ROLLBACK$/i.test(sql)));
+  assert.equal(clientCalls.some(({ sql }) => /^COMMIT$/i.test(sql)), false);
   assert.equal(released, true);
 });
