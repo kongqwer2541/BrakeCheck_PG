@@ -16,6 +16,12 @@ function invalidCredentialsError() {
   return error;
 }
 
+function lockedAccountError() {
+  const error = new Error('บัญชีถูกล็อกชั่วคราว กรุณารอ 15 นาทีหรือติดต่อผู้ดูแลระบบ');
+  error.statusCode = 401;
+  return error;
+}
+
 function publicUser(user) {
   return {
     id: user.id,
@@ -129,11 +135,15 @@ export async function login(credentials = {}) {
     throw invalidCredentialsError();
   }
 
+  const passwordMatches = await comparePassword(password, user.password_hash);
+
   if (isLocked(user)) {
+    if (passwordMatches) {
+      throw lockedAccountError();
+    }
+
     throw invalidCredentialsError();
   }
-
-  const passwordMatches = await comparePassword(password, user.password_hash);
 
   if (!passwordMatches) {
     await recordFailedLogin(user.id);

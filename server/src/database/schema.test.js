@@ -11,6 +11,12 @@ const timezoneMigrationUrl = new URL(
 );
 const timezoneMigrationSql = await readFile(timezoneMigrationUrl, 'utf8');
 const executableTimezoneMigrationSql = timezoneMigrationSql.replace(/^\s*--.*$/gm, '');
+const userAuditActionMigrationUrl = new URL(
+  './migrations/postgresql/phase-6-user-audit-actions.sql',
+  import.meta.url
+);
+const userAuditActionMigrationSql = await readFile(userAuditActionMigrationUrl, 'utf8');
+const executableUserAuditActionMigrationSql = userAuditActionMigrationSql.replace(/^\s*--.*$/gm, '');
 
 const expectedTables = [
   'users',
@@ -75,6 +81,31 @@ test('PostgreSQL baseline uses PostgreSQL identities, JSONB, checks, and timesta
   assert.match(schemaSql, /CONSTRAINT chk_lots_status CHECK/i);
   assert.match(schemaSql, /CONSTRAINT chk_form_input_type CHECK/i);
   assert.match(schemaSql, /CONSTRAINT chk_dimension_values_pass_fail\s+CHECK/i);
+});
+
+test('user audit rules support password changes in new and existing databases', () => {
+  const userAuditTable = getTableDefinition('user_audit_logs');
+
+  assert.match(
+    userAuditTable,
+    /CHECK \(action IN \('create_user', 'update_user', 'reset_password', 'change_password'\)\)/i
+  );
+  assert.match(executableUserAuditActionMigrationSql, /^\s*BEGIN;/i);
+  assert.match(
+    executableUserAuditActionMigrationSql,
+    /current_database\(\)\s*<>\s*'brakecheck_pg'/i
+  );
+  assert.match(executableUserAuditActionMigrationSql, /current_user\s*=\s*'brakecheck_app'/i);
+  assert.match(executableUserAuditActionMigrationSql, /chk_user_audit_action/i);
+  assert.match(
+    executableUserAuditActionMigrationSql,
+    /CHECK \(action IN \('create_user', 'update_user', 'reset_password', 'change_password'\)\)/i
+  );
+  assert.doesNotMatch(
+    executableUserAuditActionMigrationSql,
+    /\b(?:TRUNCATE|DELETE|UPDATE|DROP\s+TABLE|CREATE\s+DATABASE)\b/i
+  );
+  assert.match(executableUserAuditActionMigrationSql, /COMMIT;\s*$/i);
 });
 
 test('timezone migration is limited to the empty local/test database', () => {
