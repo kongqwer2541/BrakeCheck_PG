@@ -1,3 +1,5 @@
+import { pagePermissions } from '../config/app.config.js';
+
 const roleLabels = {
   head: 'Manager',
   assistant: 'Assistant Manager',
@@ -8,34 +10,34 @@ const menuGroups = [
   {
     label: 'หลัก',
     items: [
-      { id: 'dashboard', label: 'Dashboard', icon: '▦', roles: ['head', 'assistant', 'officer'] },
-      { id: 'barcode', label: 'ยิงบาร์โค้ด', icon: '⌗', roles: ['head', 'assistant', 'officer'] },
-      { id: 'importExcel', label: 'นำเข้า Excel', icon: '⇧', roles: ['head', 'assistant'] },
-      { id: 'manualLot', label: 'เพิ่ม Lot Manual', icon: '+', roles: ['head', 'assistant'] }
+      { id: 'dashboard', label: 'Dashboard', icon: '▦' },
+      { id: 'barcode', label: 'ยิงบาร์โค้ด', icon: '⌗' },
+      { id: 'importExcel', label: 'นำเข้า Excel', icon: '⇧' },
+      { id: 'manualLot', label: 'เพิ่ม Lot Manual', icon: '+' }
     ]
   },
   {
     label: 'ตรวจสอบ',
     items: [
-      { id: 'dimension', label: 'ตรวจมิติ', icon: '◇', roles: ['head', 'assistant', 'officer'] },
-      { id: 'packing', label: 'ตรวจบรรจุ', icon: '⬡', roles: ['head', 'assistant', 'officer'] },
-      { id: 'approval', label: 'ตรวจและอนุมัติ', icon: '✓', roles: ['head', 'assistant'] }
+      { id: 'dimension', label: 'ตรวจมิติ', icon: '◇' },
+      { id: 'packing', label: 'ตรวจบรรจุ', icon: '⬡' },
+      { id: 'approval', label: 'ตรวจและอนุมัติ', icon: '✓' }
     ]
   },
   {
     label: 'รายงาน',
     items: [
-      { id: 'history', label: 'ประวัติ & NG', icon: '↺', roles: ['head', 'assistant', 'officer'] },
-      { id: 'export', label: 'ส่งออก', icon: '⇩', roles: ['head', 'assistant'] },
-      { id: 'exportDimension', label: 'Export Data', icon: '⇩', roles: ['head', 'assistant'] },
-      { id: 'results', label: 'Results', icon: '⌕', roles: ['head', 'assistant', 'officer'] }
+      { id: 'history', label: 'ประวัติ & NG', icon: '↺' },
+      { id: 'export', label: 'ส่งออก', icon: '⇩' },
+      { id: 'exportDimension', label: 'Export Data', icon: '⇩' },
+      { id: 'results', label: 'Results', icon: '⌕' }
     ]
   },
   {
     label: 'ตั้งค่า',
     items: [
-      { id: 'users', label: 'ผู้ใช้งาน', icon: '♙', roles: ['head'] },
-      { id: 'settings', label: 'ตั้งค่าระบบ', icon: '⚙', roles: ['head', 'assistant'] }
+      { id: 'users', label: 'ผู้ใช้งาน', icon: '♙' },
+      { id: 'settings', label: 'ตั้งค่าระบบ', icon: '⚙' }
     ]
   }
 ];
@@ -70,7 +72,7 @@ function renderMenuItem(item, activePage, badges = {}) {
 
 function renderMenuGroups(user, activePage, badges = {}) {
   return menuGroups.map((group) => {
-    const items = group.items.filter((item) => item.roles.includes(user.role));
+    const items = group.items.filter((item) => pagePermissions[item.id]?.includes(user.role));
 
     if (!items.length) {
       return '';
