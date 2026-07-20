@@ -81,10 +81,118 @@ test('changes a password in one PostgreSQL transaction', async (t) => {
   assert.match(clientCalls[0].sql, /^BEGIN$/i);
   assert.match(clientCalls[1].sql, /password_hash = \$1[\s\S]*WHERE id = \$2/i);
   assert.equal(clientCalls[1].params[1], 7);
+  assert.equal(await bcrypt.compare('NewPass456!', clientCalls[1].params[0]), true);
+  assert.equal(await bcrypt.compare(currentPassword, clientCalls[1].params[0]), false);
   assert.match(clientCalls[2].sql, /revoke_reason = \$1[\s\S]*user_id = \$2/i);
   assert.deepEqual(clientCalls[2].params, ['password_change', 7]);
-  assert.match(clientCalls[3].sql, /^COMMIT$/i);
+  assert.match(clientCalls[3].sql, /^\s*INSERT INTO user_audit_logs/i);
+  assert.deepEqual(clientCalls[3].params.slice(0, 3), [7, 7, 'change_password']);
+  assert.doesNotMatch(JSON.stringify(clientCalls[3].params), /CurrentPass123!|NewPass456!/);
+  assert.equal(JSON.stringify(clientCalls[3].params).includes(clientCalls[1].params[0]), false);
+  assert.match(clientCalls[4].sql, /^COMMIT$/i);
   assert.equal(released, true);
+});
+
+test('rolls back a password change when its audit record cannot be saved', async (t) => {
+  const originalQuery = postgresDb.query;
+  const originalConnect = postgresDb.connect;
+  const currentPassword = 'CurrentPass123!';
+  const currentHash = await bcrypt.hash(currentPassword, 4);
+  const clientCalls = [];
+  let released = false;
+
+  t.after(() => {
+    postgresDb.query = originalQuery;
+    postgresDb.connect = originalConnect;
+  });
+
+  postgresDb.query = async () => ({
+    rows: [databaseUser({ password_hash: currentHash })]
+  });
+  postgresDb.connect = async () => ({
+    query: async (sql, params = []) => {
+      clientCalls.push({ sql, params });
+      if (/^\s*INSERT INTO user_audit_logs/i.test(sql)) {
+        throw new Error('audit unavailable');
+      }
+      return { rows: [], rowCount: 1 };
+    },
+    release: () => {
+      released = true;
+    }
+  });
+
+  await assert.rejects(
+    () => changePassword({
+      userId: 7,
+      currentPassword,
+      newPassword: 'NewPass456!'
+    }),
+    /audit unavailable/
+  );
+
+  assert.ok(clientCalls.some(({ sql }) => /^ROLLBACK$/i.test(sql)));
+  assert.equal(clientCalls.some(({ sql }) => /^COMMIT$/i.test(sql)), false);
+  assert.equal(released, true);
+});
+
+test('rejects an incorrect current password before starting a transaction', async (t) => {
+  const originalQuery = postgresDb.query;
+  const originalConnect = postgresDb.connect;
+  const currentHash = await bcrypt.hash('CurrentPass123!', 4);
+  let transactionStarted = false;
+
+  t.after(() => {
+    postgresDb.query = originalQuery;
+    postgresDb.connect = originalConnect;
+  });
+
+  postgresDb.query = async () => ({
+    rows: [databaseUser({ password_hash: currentHash })]
+  });
+  postgresDb.connect = async () => {
+    transactionStarted = true;
+    throw new Error('transaction must not start');
+  };
+
+  await assert.rejects(
+    () => changePassword({
+      userId: 7,
+      currentPassword: 'WrongPass123!',
+      newPassword: 'NewPass456!'
+    }),
+    (error) => error.statusCode === 401 && /รหัสผ่านปัจจุบันไม่ถูกต้อง/.test(error.message)
+  );
+
+  assert.equal(transactionStarted, false);
+});
+
+test('rejects an invalid new password before starting a transaction', async (t) => {
+  const originalQuery = postgresDb.query;
+  const originalConnect = postgresDb.connect;
+  let transactionStarted = false;
+
+  t.after(() => {
+    postgresDb.query = originalQuery;
+    postgresDb.connect = originalConnect;
+  });
+
+  postgresDb.query = async () => ({ rows: [databaseUser()] });
+  postgresDb.connect = async () => {
+    transactionStarted = true;
+    throw new Error('transaction must not start');
+  };
+
+  await assert.rejects(
+    () => changePassword({
+      userId: 7,
+      currentPassword: 'CurrentPass123!',
+      newPassword: 'short'
+    }),
+    (error) => error.statusCode === 400
+  );
+
+  assert.equal(transactionStarted, false);
 });
 
 test('logout revokes only the current session', async (t) => {

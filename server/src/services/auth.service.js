@@ -213,6 +213,16 @@ export async function changePassword({ userId, currentPassword, newPassword }) {
       [newPasswordHash, user.id]
     );
     await revokeAllUserAuthSessions(user.id, 'password_change', client);
+    await client.query(
+      `INSERT INTO user_audit_logs (
+        actor_user_id,
+        target_user_id,
+        action,
+        detail
+      )
+      VALUES ($1, $2, $3, $4)`,
+      [user.id, user.id, 'change_password', `Changed password for employee_code=${user.employee_code}`]
+    );
   });
 
   const updatedUser = await findUserById(user.id);
