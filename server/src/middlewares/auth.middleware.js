@@ -3,14 +3,15 @@ import { assertActiveAuthSession } from '../services/auth-session.service.js';
 import { verifyAuthToken } from '../utils/token.js';
 
 function getBearerToken(req) {
-  const authorization = req.headers.authorization || '';
-  const [scheme, token] = authorization.split(' ');
+  const authorization = req.headers?.authorization;
 
-  if (scheme !== 'Bearer' || !token) {
+  if (typeof authorization !== 'string') {
     return null;
   }
 
-  return token;
+  const match = authorization.match(/^Bearer +(\S+)$/);
+
+  return match?.[1] || null;
 }
 
 function invalidSessionError() {
