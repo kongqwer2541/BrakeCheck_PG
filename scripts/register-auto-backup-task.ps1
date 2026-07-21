@@ -84,7 +84,7 @@ if ($Delete) {
   exit 0
 }
 
-$taskRun = "`"$backupScript`" --no-pause"
+$taskRun = 'cmd.exe /d /c ""' + $backupScript + '" --no-pause"'
 $createArgs = @(
   '/Create',
   '/TN', $TaskName,
@@ -109,7 +109,7 @@ if ($Schedule -eq 'Weekly') {
 Write-Info ''
 Write-Info 'This task stores no database password.'
 Write-Info 'The backup script reads database settings from .env when it runs.'
-Write-Info 'The default backup includes the MySQL database and storage\attachments.'
+Write-Info 'The default backup includes the PostgreSQL database and storage\attachments.'
 Write-Info ''
 
 if (-not (Test-Administrator)) {

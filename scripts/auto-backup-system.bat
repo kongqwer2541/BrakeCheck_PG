@@ -7,6 +7,7 @@ set "ATTACHMENTS_DIR=%PROJECT_ROOT%\storage\attachments"
 set "DB_BACKUP_SCRIPT=%PROJECT_ROOT%\scripts\auto-backup-database.bat"
 set "NO_PAUSE="
 set "DRY_RUN="
+set "LOG_FILE=%BACKUP_DIR%\backup-log.txt"
 
 :parse_args
 if "%~1"=="" goto args_done
@@ -25,9 +26,17 @@ echo   1. PostgreSQL database
 echo   2. storage\attachments files
 echo.
 
+if not "%DRY_RUN%"=="1" if not exist "%BACKUP_DIR%" mkdir "%BACKUP_DIR%"
+if not "%DRY_RUN%"=="1" if errorlevel 1 (
+  echo ERROR: Cannot create backup folder.
+  echo Fix: Check permission and free space.
+  exit /b 1
+)
+
 if not exist "%DB_BACKUP_SCRIPT%" (
   echo ERROR: Auto database backup script not found.
   echo   %DB_BACKUP_SCRIPT%
+  call :Log "FAILED: auto database backup script not found"
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b 1
@@ -36,6 +45,7 @@ if not exist "%DB_BACKUP_SCRIPT%" (
 if not exist "%ATTACHMENTS_DIR%" (
   echo ERROR: storage\attachments folder not found.
   echo Fix: Check project files before running full system backup.
+  call :Log "FAILED: storage attachments folder not found"
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b 1
@@ -69,11 +79,11 @@ if "%DRY_RUN%"=="1" (
   exit /b 0
 )
 
-if not exist "%BACKUP_DIR%" mkdir "%BACKUP_DIR%"
 mkdir "%BACKUP_SET_DIR%"
 if errorlevel 1 (
   echo ERROR: Cannot create backup folder.
   echo Fix: Check permission and free space.
+  call :Log "FAILED: cannot create backup set folder"
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b 1
@@ -93,6 +103,7 @@ echo.
 if not "%DB_EXIT_CODE%"=="0" (
   echo System backup stopped because database backup failed.
   echo No complete backup set was created.
+  call :Log "FAILED: database backup exit code %DB_EXIT_CODE%"
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b %DB_EXIT_CODE%
@@ -100,6 +111,7 @@ if not "%DB_EXIT_CODE%"=="0" (
 
 if not exist "%DATABASE_TARGET%" (
   echo ERROR: Database backup file is missing from the backup set.
+  call :Log "FAILED: database backup file is missing"
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b 1
@@ -107,6 +119,7 @@ if not exist "%DATABASE_TARGET%" (
 
 for %%F in ("%DATABASE_TARGET%") do if %%~zF LEQ 0 (
   echo ERROR: Database backup file is empty.
+  call :Log "FAILED: database backup file is empty"
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b 1
@@ -121,6 +134,7 @@ if not "%ATTACHMENTS_EXIT_CODE%"=="0" (
   echo Attachment backup failed with error code %ATTACHMENTS_EXIT_CODE%.
   echo No complete backup set was created.
   echo Fix: Check permission and free space.
+  call :Log "FAILED: attachment backup exit code %ATTACHMENTS_EXIT_CODE%"
   if exist "%ATTACHMENTS_TARGET%" del "%ATTACHMENTS_TARGET%"
   echo.
   if not "%NO_PAUSE%"=="1" pause
@@ -129,6 +143,7 @@ if not "%ATTACHMENTS_EXIT_CODE%"=="0" (
 
 if not exist "%ATTACHMENTS_TARGET%" (
   echo ERROR: Attachment backup file was not created.
+  call :Log "FAILED: attachment backup file is missing"
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b 1
@@ -136,13 +151,21 @@ if not exist "%ATTACHMENTS_TARGET%" (
 
 for %%F in ("%ATTACHMENTS_TARGET%") do if %%~zF LEQ 0 (
   echo ERROR: Attachment backup file is empty.
+  call :Log "FAILED: attachment backup file is empty"
   if exist "%ATTACHMENTS_TARGET%" del "%ATTACHMENTS_TARGET%"
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b 1
 )
 
-echo [%DATE% %TIME%] SUCCESS: system backup created at %BACKUP_SET_DIR%>> "%LOG_FILE%"
+call :Log "SUCCESS: system backup created at %BACKUP_SET_DIR%"
+if errorlevel 1 (
+  echo ERROR: Backup completed, but the success status could not be written to the log.
+  echo   %LOG_FILE%
+  echo Fix: Check permission and free space.
+  if not "%NO_PAUSE%"=="1" pause
+  exit /b 1
+)
 echo System backup completed successfully.
 echo Folder:
 echo   %BACKUP_SET_DIR%
@@ -155,4 +178,9 @@ echo.
 echo Do not commit backup files to GitHub.
 echo.
 if not "%NO_PAUSE%"=="1" pause
+exit /b 0
+
+:Log
+echo [%DATE% %TIME%] %~1>> "%LOG_FILE%"
+if errorlevel 1 exit /b 1
 exit /b 0

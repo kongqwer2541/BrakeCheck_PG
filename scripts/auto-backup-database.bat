@@ -134,7 +134,6 @@ set "LOG_FILE=%BACKUP_DIR%\backup-log.txt"
 
 if not "%DB_PASSWORD%"=="" set "PGPASSWORD=%DB_PASSWORD%"
 
-call :Log "START: %DB_NAME% backup to %BACKUP_FILE%"
 "%PG_DUMP%" --host="%DB_HOST%" --port="%DB_PORT%" --username="%DB_USER%" --dbname="%DB_NAME%" --format=custom --file="%BACKUP_FILE%" --no-password
 set "EXIT_CODE=%ERRORLEVEL%"
 set "PGPASSWORD="
