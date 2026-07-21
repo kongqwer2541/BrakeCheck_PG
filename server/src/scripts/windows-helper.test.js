@@ -52,6 +52,7 @@ test('database backup helpers create PostgreSQL custom backups without restore c
     assert.match(script, /pg_dump/i);
     assert.match(script, /--format=custom/i);
     assert.match(script, /--file="%BACKUP_FILE%"/i);
+    assert.match(script, /--output-file/i);
     assert.match(script, /\.backup/i);
     assert.match(script, /PGPASSWORD/i);
     assert.match(script, /set "PGPASSWORD="/i);
@@ -67,6 +68,26 @@ test('full system auto backup uses the PostgreSQL database backup file', async (
 
   assert.match(script, /PostgreSQL database/i);
   assert.match(script, /database\.backup/i);
-  assert.match(script, /-Filter '\*\.backup'/i);
-  assert.doesNotMatch(script, /MySQL|mysqldump|database\.sql|Filter '\*\.sql'/i);
+  assert.match(script, /--output-file "%DATABASE_TARGET%"/i);
+  assert.doesNotMatch(script, /MySQL|mysqldump|database\.sql|LATEST_DB_BACKUP|Get-ChildItem[^\r\n]+-Filter/i);
+});
+
+test('full system backup bundles database, attachments, and backup info safely', async () => {
+  const scripts = await Promise.all([
+    readScript('backup-system.bat'),
+    readScript('auto-backup-system.bat')
+  ]);
+
+  for (const script of scripts) {
+    assert.match(script, /database\.backup/i);
+    assert.match(script, /attachments\.zip/i);
+    assert.match(script, /backup-info\.txt/i);
+    assert.match(script, /Compress-Archive/i);
+    assert.match(script, /--dry-run/i);
+    assert.match(script, /%%~zF LEQ 0/i);
+    assert.match(script, /--output-file "%DATABASE_TARGET%"/i);
+    assert.doesNotMatch(script, /LATEST_DB_BACKUP|Get-ChildItem[^\r\n]+-Filter '\*\.backup'/i);
+    assert.doesNotMatch(script, /pg_restore|\bpsql\b|DROP\s+DATABASE|TRUNCATE\s+TABLE/i);
+    assert.doesNotMatch(script, /database\.sql|mysqldump|MySQL database/i);
+  }
 });

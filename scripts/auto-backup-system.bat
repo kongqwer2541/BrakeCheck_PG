@@ -86,33 +86,27 @@ echo Attachments backup: attachments.zip>> "%INFO_FILE%"
 echo Restore note: Restore database to a test database first. Do not restore automatically.>> "%INFO_FILE%"
 
 echo [1/2] Backup database
-call "%DB_BACKUP_SCRIPT%" --no-pause
+call "%DB_BACKUP_SCRIPT%" --no-pause --output-file "%DATABASE_TARGET%"
 set "DB_EXIT_CODE=%ERRORLEVEL%"
 
 echo.
 if not "%DB_EXIT_CODE%"=="0" (
   echo System backup stopped because database backup failed.
+  echo No complete backup set was created.
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b %DB_EXIT_CODE%
 )
 
-for /f "usebackq delims=" %%F in (`powershell -NoProfile -Command "Get-ChildItem -LiteralPath '%BACKUP_DIR%' -File -Filter '*.backup' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName"`) do set "LATEST_DB_BACKUP=%%F"
-
-if "%LATEST_DB_BACKUP%"=="" (
-  echo ERROR: Database backup file was not found after backup finished.
+if not exist "%DATABASE_TARGET%" (
+  echo ERROR: Database backup file is missing from the backup set.
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b 1
 )
 
-move "%LATEST_DB_BACKUP%" "%DATABASE_TARGET%" >nul
-if errorlevel 1 (
-  echo ERROR: Cannot move database backup into the backup set folder.
-  echo Source:
-  echo   %LATEST_DB_BACKUP%
-  echo Target:
-  echo   %DATABASE_TARGET%
+for %%F in ("%DATABASE_TARGET%") do if %%~zF LEQ 0 (
+  echo ERROR: Database backup file is empty.
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b 1
@@ -125,11 +119,27 @@ set "ATTACHMENTS_EXIT_CODE=%ERRORLEVEL%"
 echo.
 if not "%ATTACHMENTS_EXIT_CODE%"=="0" (
   echo Attachment backup failed with error code %ATTACHMENTS_EXIT_CODE%.
+  echo No complete backup set was created.
   echo Fix: Check permission and free space.
   if exist "%ATTACHMENTS_TARGET%" del "%ATTACHMENTS_TARGET%"
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b %ATTACHMENTS_EXIT_CODE%
+)
+
+if not exist "%ATTACHMENTS_TARGET%" (
+  echo ERROR: Attachment backup file was not created.
+  echo.
+  if not "%NO_PAUSE%"=="1" pause
+  exit /b 1
+)
+
+for %%F in ("%ATTACHMENTS_TARGET%") do if %%~zF LEQ 0 (
+  echo ERROR: Attachment backup file is empty.
+  if exist "%ATTACHMENTS_TARGET%" del "%ATTACHMENTS_TARGET%"
+  echo.
+  if not "%NO_PAUSE%"=="1" pause
+  exit /b 1
 )
 
 echo [%DATE% %TIME%] SUCCESS: system backup created at %BACKUP_SET_DIR%>> "%LOG_FILE%"
