@@ -17,7 +17,7 @@ goto parse_args
 :args_done
 
 echo ========================================
-echo BrakeCheck - Auto Backup Database
+echo BrakeCheck - Auto Backup PostgreSQL
 echo ========================================
 echo.
 
@@ -42,7 +42,7 @@ for /f "usebackq tokens=1,* delims==" %%A in ("%ENV_FILE%") do (
 )
 
 if "%DB_HOST%"=="" set "DB_HOST=localhost"
-if "%DB_PORT%"=="" set "DB_PORT=3306"
+if "%DB_PORT%"=="" set "DB_PORT=5432"
 
 if "%DB_NAME%"=="" (
   echo ERROR: DB_NAME is missing in .env.
@@ -60,29 +60,16 @@ if "%DB_USER%"=="" (
   exit /b 1
 )
 
-if not exist "%BACKUP_DIR%" mkdir "%BACKUP_DIR%"
-set "LOG_FILE=%BACKUP_DIR%\backup-log.txt"
-
-set "MYSQLDUMP=mysqldump"
-where mysqldump >nul 2>nul
+set "PG_DUMP=pg_dump"
+where pg_dump >nul 2>nul
 if errorlevel 1 (
-  if exist "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqldump.exe" (
-    set "MYSQLDUMP=C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqldump.exe"
-  ) else if exist "C:\Program Files\MySQL\MySQL Workbench 8.0\mysqldump.exe" (
-    set "MYSQLDUMP=C:\Program Files\MySQL\MySQL Workbench 8.0\mysqldump.exe"
-  ) else if exist "C:\xampp\mysql\bin\mysqldump.exe" (
-    set "MYSQLDUMP=C:\xampp\mysql\bin\mysqldump.exe"
-  ) else if exist "C:\laragon\bin\mysql\mysql-8.0\bin\mysqldump.exe" (
-    set "MYSQLDUMP=C:\laragon\bin\mysql\mysql-8.0\bin\mysqldump.exe"
+  if exist "C:\Program Files\PostgreSQL\17\bin\pg_dump.exe" (
+    set "PG_DUMP=C:\Program Files\PostgreSQL\17\bin\pg_dump.exe"
   ) else (
-    call :Log "FAILED: mysqldump not found."
-    echo ERROR: mysqldump is not available.
-    echo Fix: Install MySQL tools or add the MySQL bin folder to PATH.
-    echo Checked common paths:
-    echo   C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqldump.exe
-    echo   C:\Program Files\MySQL\MySQL Workbench 8.0\mysqldump.exe
-    echo   C:\xampp\mysql\bin\mysqldump.exe
-    echo   C:\laragon\bin\mysql\mysql-8.0\bin\mysqldump.exe
+    echo ERROR: pg_dump is not available.
+    echo Fix: Install PostgreSQL 17 tools or add its bin folder to PATH.
+    echo Checked path:
+    echo   C:\Program Files\PostgreSQL\17\bin\pg_dump.exe
     echo.
     if not "%NO_PAUSE%"=="1" pause
     exit /b 1
@@ -90,11 +77,11 @@ if errorlevel 1 (
 )
 
 for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set "TIMESTAMP=%%I"
-set "BACKUP_FILE=%BACKUP_DIR%\%DB_NAME%_%TIMESTAMP%.sql"
+set "BACKUP_FILE=%BACKUP_DIR%\%DB_NAME%_%TIMESTAMP%.backup"
 
 if exist "%BACKUP_FILE%" (
   for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmmss"') do set "TIMESTAMP=%%I"
-  set "BACKUP_FILE=%BACKUP_DIR%\%DB_NAME%_%TIMESTAMP%.sql"
+  set "BACKUP_FILE=%BACKUP_DIR%\%DB_NAME%_%TIMESTAMP%.backup"
 )
 
 echo Environment file:
@@ -104,35 +91,61 @@ echo   %DB_NAME%
 echo Backup file:
 echo   %BACKUP_FILE%
 echo.
-echo Password is read from .env only if DB_PASSWORD is set.
+echo Password is read from .env only when DB_PASSWORD is set.
 echo This script does not print or store the password in the script file.
 echo.
 
 if "%DRY_RUN%"=="1" (
-  call :Log "DRY RUN: %DB_NAME% would backup to %BACKUP_FILE%"
-  echo DRY RUN only. No backup file was created.
+  echo DRY RUN only. No backup folder, log, or backup file was created.
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b 0
 )
 
-if not "%DB_PASSWORD%"=="" set "MYSQL_PWD=%DB_PASSWORD%"
+if not exist "%BACKUP_DIR%" mkdir "%BACKUP_DIR%"
+if errorlevel 1 (
+  echo ERROR: Cannot create the backup folder.
+  echo Fix: Check folder permission and free space.
+  echo.
+  if not "%NO_PAUSE%"=="1" pause
+  exit /b 1
+)
+set "LOG_FILE=%BACKUP_DIR%\backup-log.txt"
+
+if not "%DB_PASSWORD%"=="" set "PGPASSWORD=%DB_PASSWORD%"
 
 call :Log "START: %DB_NAME% backup to %BACKUP_FILE%"
-"%MYSQLDUMP%" -h "%DB_HOST%" -P "%DB_PORT%" -u "%DB_USER%" "%DB_NAME%" > "%BACKUP_FILE%"
+"%PG_DUMP%" --host="%DB_HOST%" --port="%DB_PORT%" --username="%DB_USER%" --dbname="%DB_NAME%" --format=custom --file="%BACKUP_FILE%" --no-password
 set "EXIT_CODE=%ERRORLEVEL%"
-set "MYSQL_PWD="
+set "PGPASSWORD="
+set "DB_PASSWORD="
 
 echo.
 if not "%EXIT_CODE%"=="0" (
   call :Log "FAILED: %DB_NAME% backup failed with code %EXIT_CODE%"
   echo Backup failed with error code %EXIT_CODE%.
-  echo Fix: Check that MySQL is running, .env values are correct, and DB_PASSWORD is correct.
-  echo If mysqldump is missing, install MySQL tools or add MySQL bin folder to PATH.
+  echo Fix: Check PostgreSQL, .env values, DB_PASSWORD, permission, and free space.
   if exist "%BACKUP_FILE%" del "%BACKUP_FILE%"
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b %EXIT_CODE%
+)
+
+if not exist "%BACKUP_FILE%" (
+  call :Log "FAILED: pg_dump did not create %BACKUP_FILE%"
+  echo ERROR: pg_dump finished but the backup file was not created.
+  echo.
+  if not "%NO_PAUSE%"=="1" pause
+  exit /b 1
+)
+
+for %%F in ("%BACKUP_FILE%") do if %%~zF LEQ 0 (
+  call :Log "FAILED: empty backup file %BACKUP_FILE%"
+  echo ERROR: The backup file is empty.
+  del "%BACKUP_FILE%"
+  echo.
+  if not "%NO_PAUSE%"=="1" pause
+  exit /b 1
 )
 
 call :Log "SUCCESS: %DB_NAME% backup created at %BACKUP_FILE%"
