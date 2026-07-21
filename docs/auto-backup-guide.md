@@ -1,6 +1,6 @@
 # คู่มือ Auto Backup ฐานข้อมูลและไฟล์แนบ
 
-คู่มือนี้ใช้ตั้ง Backup ฐานข้อมูล MySQL และไฟล์แนบอัตโนมัติบนเครื่องแม่ของ BrakeCheck
+คู่มือนี้ใช้ตั้ง Backup ฐานข้อมูล PostgreSQL และไฟล์แนบอัตโนมัติบนเครื่องแม่ของ BrakeCheck
 
 ## Auto Backup คืออะไร
 
@@ -12,7 +12,7 @@ Auto Backup คือการให้ Windows รันไฟล์ Backup ใ
 
 ## Backup ต่างจาก Restore อย่างไร
 
-- Backup คือสำรองข้อมูลออกมาเป็นไฟล์ `.sql`
+- Backup คือสำรองข้อมูล PostgreSQL ออกมาเป็นไฟล์ `database.backup`
 - Restore คือเอาไฟล์ backup กลับเข้า database หรือโฟลเดอร์ไฟล์แนบ
 
 Restore มีความเสี่ยงเพราะอาจเขียนทับข้อมูลปัจจุบัน จึงไม่ควรทำอัตโนมัติ
@@ -28,7 +28,7 @@ backups/brakecheck_auto_2026-06-30_1700/
 ในโฟลเดอร์นั้นจะมี:
 
 ```text
-database.sql
+database.backup
 attachments.zip
 backup-info.txt
 ```
@@ -89,7 +89,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/register-auto-backup
 ตรวจ 3 จุด:
 
 - มีโฟลเดอร์ใหม่ใน `backups/`
-- ในโฟลเดอร์นั้นมี `database.sql`, `attachments.zip`, และ `backup-info.txt`
+- ในโฟลเดอร์นั้นมี `database.backup`, `attachments.zip`, และ `backup-info.txt`
 - เปิด `backups/backup-log.txt` แล้วเห็นข้อความ `SUCCESS`
 - เวลาโฟลเดอร์ตรงกับเวลาที่ตั้งไว้
 
@@ -101,7 +101,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/register-auto-backup
 backups/backup-log.txt
 ```
 
-ถ้าเห็น `FAILED` ให้อ่านข้อความข้าง ๆ แล้วตรวจ MySQL, `.env`, และ `mysqldump`
+ถ้าเห็น `FAILED` ให้อ่านข้อความข้าง ๆ แล้วตรวจ PostgreSQL, `.env`, และ `pg_dump`
 
 ## วิธีเปลี่ยนเวลา Backup
 
@@ -125,11 +125,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/register-auto-backup
 
 ## ข้อควรระวัง
 
-- ไฟล์ `.sql` มีข้อมูลจริงของโรงงาน
+- ไฟล์ `database.backup` มีข้อมูลจริงของโรงงาน
 - `attachments.zip` มีไฟล์แนบจริงของโรงงาน
 - ห้ามส่งไฟล์ Backup ให้คนนอก
 - ห้ามอัปโหลด Backup ขึ้น GitHub
-- ห้าม commit `.env`, `backups/`, หรือ `*.sql`
+- ห้าม commit `.env`, `backups/`, `*.backup`, `*.sql` หรือไฟล์ backup อื่น ๆ
 - ห้ามใส่รหัสผ่านจริงใน `.bat`, `.ps1`, หรือเอกสาร
 - รหัสผ่านฐานข้อมูลให้เก็บใน `.env` ของเครื่องจริงเท่านั้น
 - ตรวจพื้นที่ว่างของเครื่องแม่เป็นระยะ เพราะ backup จะเพิ่มขึ้นเรื่อย ๆ
@@ -151,7 +151,7 @@ backups/brakecheck_auto_2026-06-30_1700/
 ในโฟลเดอร์นี้ต้องมี:
 
 ```text
-database.sql
+database.backup
 attachments.zip
 backup-info.txt
 ```
@@ -160,7 +160,7 @@ backup-info.txt
 
 1. Backup สภาพปัจจุบันก่อนเสมอ แม้ข้อมูลจะเสียหรือหายบางส่วน
 2. หยุดใช้งานระบบชั่วคราว เช่น Import, Approve, แก้ Lot และปิด server ถ้าจะ restore database จริง
-3. Restore `database.sql` เข้า test database ก่อน ห้าม restore ทับ database จริงทันที
+3. Restore `database.backup` เข้า test database ด้วย `pg_restore` ก่อน ห้าม restore ทับ database จริงทันที
 4. ให้ระบบชี้ไป test database ชั่วคราวด้วยค่า `DB_NAME` ใน `.env` แล้วตรวจข้อมูลในระบบ
 5. ตรวจ Login, Lot สำคัญ, ค่าตรวจ QC, Audit/History, Report/Export และไฟล์แนบ
 6. แตก `attachments.zip` ไปที่โฟลเดอร์ทดสอบก่อน อย่าแตกทับ `storage\attachments\` จริงทันที
@@ -169,21 +169,21 @@ backup-info.txt
 
 ข้อควรระวังที่ห้ามข้าม:
 
-- ระบบ BrakeCheck อ่านข้อมูลจาก MySQL ตามค่า `DB_NAME` ใน `.env` ไม่ได้อ่านไฟล์ backup โดยตรง
+- ระบบ BrakeCheck อ่านข้อมูลจาก PostgreSQL ตามค่า `DB_NAME` ใน `.env` ไม่ได้อ่านไฟล์ backup โดยตรง
 - ห้ามใส่ password จริงในคำสั่งหรือเอกสาร
-- ห้าม commit `.env`, `backups/`, `*.sql`, หรือไฟล์ `.zip` backup ขึ้น GitHub
+- ห้าม commit `.env`, `backups/`, `*.backup`, `*.sql` หรือไฟล์ `.zip` backup ขึ้น GitHub
 - ห้ามลบ backup ชุดเก่า, backup สภาพปัจจุบัน, หรือโฟลเดอร์ไฟล์แนบเดิมจนกว่าจะตรวจผ่าน
 - ถ้าไม่แน่ใจว่า database เป็น test หรือ real ให้หยุดและถามก่อน
 - Auto Backup นี้ไม่ทำ Restore, ไม่รัน migration, และไม่ลบ backup เก่าอัตโนมัติ
 
-## ถ้า mysqldump ไม่พบ
+## ถ้า pg_dump ไม่พบ
 
-`mysqldump` คือเครื่องมือของ MySQL สำหรับ export database เป็นไฟล์ `.sql`
+`pg_dump` คือเครื่องมือของ PostgreSQL สำหรับสร้างไฟล์ backup แบบ custom เช่น `database.backup`
 
-ถ้าสคริปต์แจ้งว่า `mysqldump is not available` ให้ติดตั้ง MySQL tools หรือเพิ่มโฟลเดอร์ MySQL `bin` เข้า PATH เช่น:
+ถ้าสคริปต์แจ้งว่า `pg_dump is not available` ให้ติดตั้ง PostgreSQL 17 tools หรือเพิ่มโฟลเดอร์ PostgreSQL `bin` เข้า PATH เช่น:
 
 ```text
-C:\Program Files\MySQL\MySQL Server 8.0\bin
+C:\Program Files\PostgreSQL\17\bin
 ```
 
 ถ้าไม่แน่ใจ ให้ถาม IT ก่อนแก้ค่าเครื่อง
