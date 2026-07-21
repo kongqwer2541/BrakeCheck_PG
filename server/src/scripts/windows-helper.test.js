@@ -91,3 +91,29 @@ test('full system backup bundles database, attachments, and backup info safely',
     assert.doesNotMatch(script, /database\.sql|mysqldump|MySQL database/i);
   }
 });
+
+test('auto backup logs only success or failure without secrets or retention deletion', async () => {
+  const scripts = await Promise.all([
+    readScript('auto-backup-database.bat'),
+    readScript('auto-backup-system.bat')
+  ]);
+
+  for (const script of scripts) {
+    assert.match(script, /SUCCESS/i);
+    assert.match(script, /FAILED/i);
+    assert.doesNotMatch(script, /call :Log\s+"START/i);
+    assert.doesNotMatch(script, /(?:call :Log|>>)[^\r\n]*(?:DB_PASSWORD|PGPASSWORD)/i);
+    assert.doesNotMatch(script, /Remove-Item|del[^\r\n]*backups/i);
+  }
+});
+
+test('auto backup task runs the batch script through cmd without storing passwords', async () => {
+  const script = await readScript('register-auto-backup-task.ps1');
+
+  assert.match(script, /cmd\.exe \/d \/c/i);
+  assert.match(script, /auto-backup-system\.bat/i);
+  assert.match(script, /--no-pause/i);
+  assert.match(script, /DryRun/i);
+  assert.match(script, /PostgreSQL database/i);
+  assert.doesNotMatch(script, /DB_PASSWORD|PGPASSWORD|Remove-Item[^\r\n]*backups|del[^\r\n]*backups/i);
+});
