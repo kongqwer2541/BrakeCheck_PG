@@ -21,7 +21,7 @@ echo BrakeCheck - Auto Backup System
 echo ========================================
 echo.
 echo This will backup:
-echo   1. MySQL database
+echo   1. PostgreSQL database
 echo   2. storage\attachments files
 echo.
 
@@ -49,7 +49,7 @@ if exist "%BACKUP_SET_DIR%" (
   set "BACKUP_SET_DIR=%BACKUP_DIR%\brakecheck_auto_%TIMESTAMP%"
 )
 
-set "DATABASE_TARGET=%BACKUP_SET_DIR%\database.sql"
+set "DATABASE_TARGET=%BACKUP_SET_DIR%\database.backup"
 set "ATTACHMENTS_TARGET=%BACKUP_SET_DIR%\attachments.zip"
 set "INFO_FILE=%BACKUP_SET_DIR%\backup-info.txt"
 set "LOG_FILE=%BACKUP_DIR%\backup-log.txt"
@@ -81,7 +81,7 @@ if errorlevel 1 (
 
 echo Created at: %DATE% %TIME%> "%INFO_FILE%"
 echo Project root: %PROJECT_ROOT%>> "%INFO_FILE%"
-echo Database backup: database.sql>> "%INFO_FILE%"
+echo Database backup: database.backup>> "%INFO_FILE%"
 echo Attachments backup: attachments.zip>> "%INFO_FILE%"
 echo Restore note: Restore database to a test database first. Do not restore automatically.>> "%INFO_FILE%"
 
@@ -97,7 +97,7 @@ if not "%DB_EXIT_CODE%"=="0" (
   exit /b %DB_EXIT_CODE%
 )
 
-for /f "usebackq delims=" %%F in (`powershell -NoProfile -Command "Get-ChildItem -LiteralPath '%BACKUP_DIR%' -File -Filter '*.sql' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName"`) do set "LATEST_DB_BACKUP=%%F"
+for /f "usebackq delims=" %%F in (`powershell -NoProfile -Command "Get-ChildItem -LiteralPath '%BACKUP_DIR%' -File -Filter '*.backup' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName"`) do set "LATEST_DB_BACKUP=%%F"
 
 if "%LATEST_DB_BACKUP%"=="" (
   echo ERROR: Database backup file was not found after backup finished.
@@ -138,7 +138,7 @@ echo Folder:
 echo   %BACKUP_SET_DIR%
 echo.
 echo Created files:
-echo   database.sql
+echo   database.backup
 echo   attachments.zip
 echo   backup-info.txt
 echo.
