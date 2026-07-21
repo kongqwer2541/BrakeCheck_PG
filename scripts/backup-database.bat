@@ -7,14 +7,30 @@ set "SERVER_ENV_FILE=%PROJECT_ROOT%\server\.env"
 set "BACKUP_DIR=%PROJECT_ROOT%\backups"
 set "NO_PAUSE="
 set "DRY_RUN="
+set "OUTPUT_FILE="
+set "ARGUMENT_ERROR="
 
 :parse_args
 if "%~1"=="" goto args_done
 if /i "%~1"=="--no-pause" set "NO_PAUSE=1"
 if /i "%~1"=="--dry-run" set "DRY_RUN=1"
+if /i "%~1"=="--output-file" (
+  if "%~2"=="" set "ARGUMENT_ERROR=--output-file requires a path."
+  if /i "%~2"=="--no-pause" set "ARGUMENT_ERROR=--output-file requires a path."
+  if /i "%~2"=="--dry-run" set "ARGUMENT_ERROR=--output-file requires a path."
+  set "OUTPUT_FILE=%~2"
+  shift
+)
 shift
 goto parse_args
 :args_done
+
+if not "%ARGUMENT_ERROR%"=="" (
+  echo ERROR: %ARGUMENT_ERROR%
+  echo.
+  if not "%NO_PAUSE%"=="1" pause
+  exit /b 1
+)
 
 echo ========================================
 echo BrakeCheck - Backup PostgreSQL Database
@@ -74,8 +90,12 @@ if errorlevel 1 (
   )
 )
 
-for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss"') do set "TIMESTAMP=%%I"
-set "BACKUP_FILE=%BACKUP_DIR%\%DB_NAME%_backup_%TIMESTAMP%.backup"
+if "%OUTPUT_FILE%"=="" (
+  for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss"') do set "TIMESTAMP=%%I"
+  set "BACKUP_FILE=%BACKUP_DIR%\%DB_NAME%_backup_%TIMESTAMP%.backup"
+) else (
+  set "BACKUP_FILE=%OUTPUT_FILE%"
+)
 
 echo Environment file:
 echo   %ENV_FILE%
