@@ -13,12 +13,12 @@
 
 ## ภาพรวมแบบสั้น
 
-- เครื่องแม่: คอมหลักที่เปิด server และเก็บฐานข้อมูล MySQL
+- เครื่องแม่: คอมหลักที่เปิด server และเก็บฐานข้อมูล PostgreSQL
 - เครื่องลูก: คอมเครื่องอื่นที่เปิดเว็บผ่าน Chrome
 - ไม่ต้องติดตั้ง BrakeCheck ทุกเครื่อง
 - ก่อนอัปเดตระบบหรือทำงานกับข้อมูลจริง ต้อง Backup database และไฟล์แนบก่อนเสมอ
 - ก่อนใช้งานจริงในบริษัท ควรคุยกับ IT หรือหัวหน้างานก่อน
-- ถ้าต้องส่งภาพรวมให้ IT ให้ใช้ไฟล์นี้คู่กับ `docs/backup-restore-guide.md` และอย่าส่ง `.env`, password, `backups/`, `*.sql` หรือข้อมูลโรงงานจริง
+- ถ้าต้องส่งภาพรวมให้ IT ให้ใช้ไฟล์นี้คู่กับ `docs/backup-restore-guide.md` และอย่าส่ง `.env`, password, `backups/`, `*.backup`, `*.sql` หรือข้อมูลโรงงานจริง
 
 ## เครื่องแม่คืออะไร
 
@@ -28,7 +28,7 @@
 
 - เปิด BrakeCheck server
 - เก็บไฟล์โปรเจกต์ BrakeCheck
-- เชื่อมต่อ MySQL database
+- เชื่อมต่อ PostgreSQL database
 - ให้เครื่องลูกเปิดเว็บเข้ามาใช้งานผ่านเครือข่ายภายในบริษัท
 
 ถ้าเครื่องแม่ปิด เครื่องลูกจะเปิดเว็บ BrakeCheck ไม่ได้
@@ -42,7 +42,7 @@
 - Chrome
 - อยู่ในเครือข่ายเดียวกับเครื่องแม่
 
-เครื่องลูกไม่ต้องติดตั้ง Node.js, MySQL, Git หรือโค้ด BrakeCheck
+เครื่องลูกไม่ต้องติดตั้ง Node.js, PostgreSQL, Git หรือโค้ด BrakeCheck
 
 ## ทำไมไม่ควรติดตั้งทุกเครื่อง
 
@@ -62,7 +62,7 @@
 
 - Chrome สำหรับเปิดเว็บทดสอบ
 - Node.js สำหรับรัน backend server
-- MySQL สำหรับเก็บข้อมูล
+- PostgreSQL 17 สำหรับเก็บข้อมูล
 - VS Code สำหรับเปิดโปรเจกต์และแก้ไฟล์
 - Git สำหรับอัปเดตโค้ดและดูสถานะงาน
 
@@ -227,37 +227,38 @@ Firewall คือระบบป้องกันเครือข่าย�
 
 อย่าปิด Firewall เองถ้าไม่ได้รับอนุญาตจาก IT
 
-## ข้อควรระวังเรื่อง MySQL
+## ข้อควรระวังเรื่อง PostgreSQL
 
-MySQL คือฐานข้อมูลที่เก็บข้อมูล QC
+PostgreSQL คือฐานข้อมูลที่เก็บข้อมูล QC
 
 ข้อควรระวัง:
 
-- เครื่องแม่ต้องเปิด MySQL อยู่
+- เครื่องแม่ต้องเปิด PostgreSQL อยู่
 - ค่า `.env` ต้องชี้ไปฐานข้อมูลที่ถูกต้อง
-- production ควรใช้ MySQL user เฉพาะระบบ เช่น `brakecheck_app` ห้ามใช้ `root`
+- production ควรใช้ PostgreSQL role เฉพาะระบบ เช่น `brakecheck_app` ห้ามให้แอปใช้ role ผู้ดูแล `postgres`
 - ห้ามใช้ฐานข้อมูลจริงเป็นที่ทดลอง
 - ห้ามรันคำสั่ง `DROP`, `TRUNCATE`, หรือ reset database กับข้อมูลจริง
 - ถ้าไม่แน่ใจว่าเป็นฐานข้อมูลจริงหรือทดสอบ ให้หยุดและถามก่อน
 
-เครื่องลูกไม่ต้องต่อ MySQL โดยตรง ให้ใช้งานผ่านเว็บ BrakeCheck เท่านั้น
+เครื่องลูกไม่ต้องต่อ PostgreSQL โดยตรง ให้ใช้งานผ่านเว็บ BrakeCheck เท่านั้น
 
-### MySQL user สำหรับ production
+### PostgreSQL role สำหรับ production
 
-`root` คือ user ใหญ่สุดของ MySQL ถ้ารหัสหลุดหรือระบบพลาด อาจกระทบได้ทั้ง database
+`postgres` คือ role ผู้ดูแล PostgreSQL ถ้ารหัสหลุดหรือระบบพลาด อาจกระทบได้ทั้ง database
 
-สำหรับใช้งานจริง ให้ IT สร้าง user เฉพาะ BrakeCheck และให้สิทธิ์เฉพาะฐานข้อมูล `brakecheck` เท่าที่ระบบต้องใช้:
+สำหรับใช้งานจริง ให้ IT สร้าง role เฉพาะ BrakeCheck และให้สิทธิ์เฉพาะฐานข้อมูล `brakecheck_pg` เท่าที่ระบบต้องใช้:
 
 ```sql
-CREATE USER 'brakecheck_app'@'localhost' IDENTIFIED BY '<strong-password>';
-GRANT SELECT, INSERT, UPDATE, DELETE ON brakecheck.* TO 'brakecheck_app'@'localhost';
-FLUSH PRIVILEGES;
+CREATE ROLE brakecheck_app LOGIN PASSWORD '<strong-password>';
+GRANT CONNECT ON DATABASE brakecheck_pg TO brakecheck_app;
 ```
+
+ให้ IT ตรวจและมอบสิทธิ์ตารางตาม schema ปัจจุบันก่อนใช้งานจริง ไม่ควรให้ผู้ใช้ทั่วไปสร้าง role หรือแก้สิทธิ์เอง
 
 จากนั้นตั้งค่า `.env` บนเครื่องแม่:
 
 ```text
-DB_NAME=brakecheck
+DB_NAME=brakecheck_pg
 DB_USER=brakecheck_app
 DB_PASSWORD=<strong-password>
 ```
@@ -316,7 +317,7 @@ backups/
 
 ควรตรวจว่าได้ทั้ง:
 
-- ไฟล์ `.sql` สำหรับ database
+- ไฟล์ `database.backup` สำหรับ database
 - ไฟล์ `.zip` สำหรับ `storage/attachments`
 
 ห้าม commit ไฟล์ backup ขึ้น GitHub
@@ -339,7 +340,7 @@ backups/
 - ใครดูแลเครื่องแม่
 - ต้องตั้ง IP เครื่องแม่ให้คงที่หรือไม่
 - Firewall อนุญาต port `3000` หรือไม่
-- MySQL ใช้ user เฉพาะระบบแล้วหรือยัง ห้ามใช้ `root` ใน production
+- PostgreSQL ใช้ role เฉพาะระบบแล้วหรือยัง ห้ามใช้ `postgres` กับแอปใน production
 - Backup database และไฟล์แนบเก็บไว้ที่ไหน และใครรับผิดชอบ
 - ถ้าเครื่องแม่เสีย จะกู้ระบบจาก backup อย่างไร
 - ช่วงเวลาไหนเหมาะสำหรับอัปเดตระบบ
@@ -347,8 +348,8 @@ backups/
 ## ขั้นตอนติดตั้งแบบย่อ
 
 1. เลือกเครื่องแม่ 1 เครื่อง
-2. ติดตั้ง Node.js, MySQL, Chrome, VS Code และ Git บนเครื่องแม่
-3. ให้ IT สร้าง MySQL user เฉพาะระบบ เช่น `brakecheck_app`
+2. ติดตั้ง Node.js, PostgreSQL 17, Chrome, VS Code และ Git บนเครื่องแม่
+3. ให้ IT สร้าง PostgreSQL role เฉพาะระบบ เช่น `brakecheck_app`
 4. ตั้งค่า `.env` บนเครื่องแม่ รวมถึง `DB_USER`, `DB_PASSWORD` และ `SESSION_SECRET`
 5. ตรวจระบบด้วย `scripts/check-system.bat`
 6. Backup ทั้งระบบด้วย `scripts/backup-system.bat`

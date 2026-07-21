@@ -2,7 +2,7 @@
 
 คู่มือนี้ช่วยป้องกันข้อมูล QC หายก่อนอัปเดตระบบ แก้ฐานข้อมูล หรือ Import Excel จำนวนมาก
 
-ไฟล์นี้เป็นแหล่งหลักของเรื่อง Backup และ Restore ทั้งหมด รวมถึง backup ที่สร้างจาก `scripts/backup-system.bat`, `scripts/auto-backup-system.bat`, หรือโฟลเดอร์ Auto Backup ที่มี `database.sql`, `attachments.zip`, และ `backup-info.txt`
+ไฟล์นี้เป็นแหล่งหลักของเรื่อง Backup และ Restore ทั้งหมด รวมถึง backup ที่สร้างจาก `scripts/backup-system.bat`, `scripts/auto-backup-system.bat`, หรือโฟลเดอร์ Auto Backup ที่มี `database.backup`, `attachments.zip`, และ `backup-info.txt`
 
 ถ้าเอกสารอื่นพูดถึง Restore แบบสั้น ๆ ให้กลับมาอ่านขั้นตอนเต็มในไฟล์นี้ก่อนทำจริง
 
@@ -19,16 +19,16 @@ Backup คือการสำรองข้อมูลไว้เป็น�
 
 สำหรับ BrakeCheck ข้อมูลสำคัญมี 2 ส่วน:
 
-- MySQL: เก็บ Lot, ประวัติ Import, Audit, ใบตรวจ, สถานะงาน QC และข้อมูลไฟล์แนบ
+- PostgreSQL: เก็บ Lot, ประวัติ Import, Audit, ใบตรวจ, สถานะงาน QC และข้อมูลไฟล์แนบ
 - `storage/attachments`: เก็บไฟล์แนบจริง เช่น PDF หรือรูปภาพที่แนบกับ Lot
 
-ถ้า Backup เฉพาะ MySQL ข้อมูลตรวจจะยังอยู่ แต่ไฟล์แนบจริงอาจหายได้ จึงควร Backup ทั้ง database และ `storage/attachments`
+ถ้า Backup เฉพาะ PostgreSQL ข้อมูลตรวจจะยังอยู่ แต่ไฟล์แนบจริงอาจหายได้ จึงควร Backup ทั้ง database และ `storage/attachments`
 
 ## Restore คืออะไร
 
 Restore คือการนำไฟล์ Backup กลับเข้า database
 
-ระบบ BrakeCheck อ่านข้อมูลจาก MySQL ตามค่า `DB_NAME` ในไฟล์ `.env` ไม่ได้อ่านไฟล์ backup โดยตรง ดังนั้นไฟล์ `.sql` และ `attachments.zip` เป็นเพียงไฟล์ต้นทางสำหรับกู้ข้อมูลกลับเข้า MySQL และโฟลเดอร์ไฟล์แนบ
+ระบบ BrakeCheck อ่านข้อมูลจาก PostgreSQL ตามค่า `DB_NAME` ในไฟล์ `.env` ไม่ได้อ่านไฟล์ backup โดยตรง ดังนั้นไฟล์ `database.backup` และ `attachments.zip` เป็นเพียงไฟล์ต้นทางสำหรับกู้ข้อมูลกลับเข้า PostgreSQL และโฟลเดอร์ไฟล์แนบ
 
 ข้อควรระวัง: Restore อาจเขียนทับข้อมูลปัจจุบัน ทำให้ข้อมูลที่เพิ่มหลังเวลา Backup หายได้ จึงต้องตรวจให้แน่ใจก่อนว่าใช้ไฟล์ Backup ถูกตัวและ restore ไปยัง database ถูกตัว
 
@@ -60,7 +60,7 @@ scripts/backup-system.bat
 
 ปุ่มนี้จะทำ 2 อย่าง:
 
-1. Backup MySQL database เป็นไฟล์ `.sql`
+1. Backup PostgreSQL database เป็นไฟล์ `database.backup`
 2. Backup `storage/attachments` เป็นไฟล์ `.zip`
 
 ไฟล์ backup ทั้งสองไฟล์จะอยู่ใน:
@@ -80,7 +80,7 @@ Checklist:
 - ตรวจว่าอยู่เครื่อง/database ไหน
 - ยืนยันว่าเป็น database จริงหรือ test
 - Backup ทั้งระบบด้วย `scripts/backup-system.bat`
-- ตรวจว่าได้ทั้งไฟล์ `.sql` ของ database และไฟล์ `.zip` ของ attachments
+- ตรวจว่าได้ทั้งไฟล์ `database.backup` ของ database และไฟล์ `.zip` ของ attachments
 - สำหรับ backup สำคัญหรือเก็บระยะยาว ให้ copy ไฟล์ออกไปนอก repo หรือที่เก็บที่บริษัทกำหนด
 - จดเวลาและเหตุผลของ backup
 
@@ -116,9 +116,9 @@ Schema คือโครงสร้างฐานข้อมูล เช่
 ตัวอย่าง:
 
 ```text
-brakecheck_backup_2026-06-11_before_step_8_3.sql
-brakecheck_backup_2026-06-11_before_big_excel_import.sql
-brakecheck_backup_2026-06-11_before_migration.sql
+brakecheck_backup_2026-06-11_before_step_8_3.backup
+brakecheck_backup_2026-06-11_before_big_excel_import.backup
+brakecheck_backup_2026-06-11_before_migration.backup
 ```
 
 แนะนำให้ใช้วันที่แบบ `YYYY-MM-DD` เพื่อเรียงลำดับง่าย
@@ -154,24 +154,24 @@ brakecheck_backup_2026-06-11_before_migration.sql
 
 ไฟล์ที่ควรมี:
 
-- แบบ Auto Backup ล่าสุด: โฟลเดอร์ `brakecheck_auto_2026-06-30_2230` ที่มี `database.sql`, `attachments.zip`, และ `backup-info.txt`
-- แบบ backup เดิม: ไฟล์ database เช่น `brakecheck_backup_20260629-204003.sql` และไฟล์แนบ เช่น `attachments_backup_20260629-204009.zip`
+- แบบ Auto Backup ล่าสุด: โฟลเดอร์ `brakecheck_auto_2026-06-30_2230` ที่มี `database.backup`, `attachments.zip`, และ `backup-info.txt`
+- แบบ backup เดิม: ถ้าเป็นไฟล์ `.sql` จากระบบ MySQL เดิม ให้หยุดและถาม IT ก่อน เพราะคู่มือนี้ใช้ PostgreSQL custom backup (`.backup`)
 
 ข้อควรจำ: ให้ restore เข้า test database ก่อนเสมอ อย่า restore ทับ database จริงทันที
 
 ### ขั้นที่ 1: นำไฟล์ backup มาไว้ในเครื่องแม่
 
-นำโฟลเดอร์ backup หรือไฟล์ `.sql`/`.zip` มาไว้ในโฟลเดอร์ที่หาเจอง่าย เช่น:
+นำโฟลเดอร์ backup หรือไฟล์ `.backup`/`.zip` มาไว้ในโฟลเดอร์ที่หาเจอง่าย เช่น:
 
 ```text
-C:\Users\KONG\Documents\BrakeCheck\backups\
+C:\Users\KONG\Documents\BrakeCheck_PG\backups\
 ```
 
 ถ้าเป็น Auto Backup ล่าสุด path จะหน้าตาประมาณนี้:
 
 ```text
-C:\Users\KONG\Documents\BrakeCheck\backups\brakecheck_auto_2026-06-30_2230\database.sql
-C:\Users\KONG\Documents\BrakeCheck\backups\brakecheck_auto_2026-06-30_2230\attachments.zip
+C:\Users\KONG\Documents\BrakeCheck_PG\backups\brakecheck_auto_2026-06-30_2230\database.backup
+C:\Users\KONG\Documents\BrakeCheck_PG\backups\brakecheck_auto_2026-06-30_2230\attachments.zip
 ```
 
 ถ้า backup สำคัญถูกเก็บไว้นอก repo หรือที่เก็บของบริษัท ให้ copy กลับมาใช้งานเฉพาะตอน restore
@@ -199,61 +199,38 @@ scripts\auto-backup-system.bat
 
 หลัง backup เสร็จ ให้ตรวจว่าได้โฟลเดอร์ใหม่ใน `backups/` ที่มี:
 
-- `database.sql`
+- `database.backup`
 - `attachments.zip`
 - `backup-info.txt`
 
-### ขั้นที่ 4: เตรียม test database ใน MySQL
+### ขั้นที่ 4: เตรียม test database ใน PostgreSQL
 
-เปิด MySQL แล้วสร้าง database ทดสอบชื่อใหม่ เช่น:
+เปิด pgAdmin แล้วสร้าง database ทดสอบชื่อใหม่ เช่น `brakecheck_restore_test` โดยใช้ PostgreSQL 17
 
-```sql
-CREATE DATABASE brakecheck_restore_test
-CHARACTER SET utf8mb4
-COLLATE utf8mb4_unicode_ci;
-```
+อย่าเลือก database จริง และอย่าใช้คำสั่งลบหรือเขียนทับ database เดิม
 
-ถ้าใช้ MySQL user ตาม `.env` เดิม ให้ตรวจว่า user นั้นมีสิทธิ์กับ test database ด้วย
-
-ตัวอย่างคำสั่งให้สิทธิ์:
-
-```sql
-GRANT ALL PRIVILEGES
-ON brakecheck_restore_test.*
-TO 'ชื่อ_user_mysql'@'localhost';
-```
-
-หมายเหตุ:
-
-- เปลี่ยน `ชื่อ_user_mysql` ให้ตรงกับ `DB_USER` ใน `.env`
-- ห้ามเขียนรหัสผ่านจริงลงเอกสาร
-- ถ้าไม่แน่ใจเรื่องสิทธิ์ MySQL ให้ให้ IT ช่วยตรวจ
+ถ้าใช้ PostgreSQL role ตาม `.env` เดิม ให้ IT ตรวจว่ามีสิทธิ์เชื่อมต่อ test database และสร้างตารางได้
 
 ### ขั้นที่ 5: Restore ไฟล์ database เข้า test database
 
-เปิด Command Prompt แล้วใช้คำสั่งรูปแบบนี้:
+การ Restore เป็นขั้นตอน Manual เท่านั้น ให้ IT หรือผู้ที่ได้รับอนุมัติเปิด Command Prompt แล้วใช้คำสั่งรูปแบบนี้กับ database ทดสอบที่ว่าง:
 
 ```text
-"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -h localhost -P 3306 -u ชื่อ_user_mysql -p brakecheck_restore_test < "C:\Users\KONG\Documents\BrakeCheck\backups\brakecheck_auto_2026-06-30_2230\database.sql"
+pg_restore --host=localhost --port=5432 --username=ชื่อ_user_postgresql --dbname=brakecheck_restore_test --no-owner --no-privileges "C:\Users\KONG\Documents\BrakeCheck_PG\backups\brakecheck_auto_2026-06-30_2230\database.backup"
 ```
 
-ตัวอย่างไฟล์ backup รุ่นเดิม:
-
-```text
-"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -h localhost -P 3306 -u root -p brakecheck_restore_test < "C:\Users\KONG\Documents\BrakeCheck\backups\brakecheck_backup_20260629-204003.sql"
-```
-
-หลังรันคำสั่ง MySQL จะถาม password ให้กรอกรหัสผ่าน MySQL ของเครื่องนั้น
+หลังรันคำสั่ง PostgreSQL จะถาม password ให้กรอกรหัสผ่านของเครื่องนั้นในช่องถามเท่านั้น
 
 หมายเหตุ:
 
-- คำสั่งนี้เป็นตัวอย่าง ให้เปลี่ยนชื่อ user, database และไฟล์ backup ให้ตรงกับเครื่องจริง
+- คำสั่งนี้เป็นตัวอย่าง ให้เปลี่ยนชื่อ role, database และไฟล์ backup ให้ตรงกับเครื่องจริง
 - อย่าใส่รหัสผ่านจริงไว้ในคำสั่งหรือในเอกสาร
 - ถ้า restore เข้า test database ไม่ผ่าน ห้าม restore เข้า database จริง
+- ห้ามเติม `--clean`, `--create` หรือคำสั่งลบใด ๆ ในการซ้อม Restore
 
 ### ขั้นที่ 6: ให้ระบบชี้ไปที่ test database ชั่วคราว
 
-ก่อนแก้ `.env` ให้จดค่าเดิมของ `DB_NAME` ไว้ก่อน เช่น `brakecheck`
+ก่อนแก้ `.env` ให้จดค่าเดิมของ `DB_NAME` ไว้ก่อน เช่น `brakecheck_pg`
 
 จากนั้นแก้ `.env` ชั่วคราว:
 
@@ -317,29 +294,25 @@ storage\attachments\
 ก่อน restore ทับ database จริง ต้องยืนยันครบทุกข้อ:
 
 - test database restore ผ่านแล้ว
-- ไฟล์ `database.sql` หรือ `.sql` ถูกตัว
+- ไฟล์ `database.backup` ถูกตัว
 - ไฟล์ `attachments.zip` หรือ `.zip` ถูกตัว
 - backup สภาพปัจจุบันแล้ว
 - ไม่มีผู้ใช้กำลังใช้งานระบบ
 - หัวหน้า QC หรือ IT อนุมัติแล้ว
-- รู้แน่ชัดว่า database จริงชื่ออะไร เช่น `brakecheck`
+- รู้แน่ชัดว่า database จริงชื่ออะไร เช่น `brakecheck_pg`
 
 ถ้าข้อใดข้อหนึ่งยังไม่ชัด ให้หยุดและถามก่อน
 
-### ขั้นที่ 10: Restore เข้า database จริง
+### ขั้นที่ 10: Restore เข้า database จริง (Manual เท่านั้น)
 
-เมื่อตรวจทุกอย่างผ่านแล้วเท่านั้น จึงค่อย restore เข้า database จริง
+เมื่อตรวจทุกอย่างผ่านแล้วเท่านั้น จึงค่อยให้ IT หรือผู้มีอำนาจอนุมัติดำเนินการ Restore จริง
 
-ตัวอย่างรูปแบบคำสั่ง:
+คู่มือนี้ไม่สั่ง Restore จริงให้อัตโนมัติ และไม่ให้ผู้ใช้ทั่วไปนำคำสั่งไปกดเอง เพราะอาจเขียนทับข้อมูล production ได้ ให้ IT ตรวจชื่อ database, role, สิทธิ์ และวิธี Restore ที่องค์กรอนุมัติก่อนทุกครั้ง
 
-```text
-"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -h localhost -P 3306 -u ชื่อ_user_mysql -p brakecheck < "C:\Users\KONG\Documents\BrakeCheck\backups\brakecheck_auto_2026-06-30_2230\database.sql"
-```
-
-หลัง restore database จริงแล้ว ให้เปลี่ยน `.env` กลับมาชี้ database จริง:
+หลัง Restore database จริงแล้ว ให้ตรวจและตั้ง `.env` ให้ชี้ database จริง:
 
 ```text
-DB_NAME=brakecheck
+DB_NAME=brakecheck_pg
 ```
 
 แล้วเปิด server ใหม่
@@ -362,7 +335,7 @@ DB_NAME=brakecheck
 
 - ห้าม restore ทับ database จริงทันที
 - ห้ามลบ backup เก่า
-- ห้าม commit ไฟล์ `.sql` หรือ `.zip`
+- ห้าม commit ไฟล์ `.backup`, `.sql` หรือ `.zip`
 - ห้ามใส่รหัสผ่านจริงในเอกสาร
 - ห้ามใช้ `DROP DATABASE` กับ database จริง
 - ถ้าไม่แน่ใจว่าเป็น test หรือ real database ให้หยุดถามก่อน

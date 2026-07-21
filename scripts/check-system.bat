@@ -55,9 +55,27 @@ if exist "%ENV_FILE%" (
 )
 echo.
 
-echo [5] Next steps
+echo [5] PostgreSQL tools
+where psql >nul 2>nul
+if errorlevel 1 (
+  echo   ERROR: psql not found.
+  echo   Fix: Install PostgreSQL 17 or add its bin folder to PATH.
+) else (
+  for /f "tokens=*" %%V in ('psql --version') do echo   OK: %%V
+)
+
+where pg_dump >nul 2>nul
+if errorlevel 1 (
+  echo   ERROR: pg_dump not found.
+  echo   Fix: Install PostgreSQL 17 tools or add its bin folder to PATH.
+) else (
+  echo   OK: pg_dump found.
+)
+echo.
+
+echo [6] Next steps
 echo   - If Node/npm is missing, install Node.js.
 echo   - If .env is missing, create it from .env.example.
-echo   - If database health fails, check MySQL and .env values.
+echo   - If database health fails, check PostgreSQL and .env values.
 echo.
 pause
