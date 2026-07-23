@@ -92,16 +92,25 @@ if errorlevel 1 (
   )
 )
 
-if "%OUTPUT_FILE%"=="" (
-  for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set "TIMESTAMP=%%I"
-  set "BACKUP_FILE=%BACKUP_DIR%\%DB_NAME%_%TIMESTAMP%.backup"
+if "%OUTPUT_FILE%"=="" for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set "BACKUP_FILE=%BACKUP_DIR%\%DB_NAME%_%%I.backup"
+if not "%OUTPUT_FILE%"=="" set "BACKUP_FILE=%OUTPUT_FILE%"
+if "%OUTPUT_FILE%"=="" if exist "%BACKUP_FILE%" for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmmssfff"') do set "BACKUP_FILE=%BACKUP_DIR%\%DB_NAME%_%%I.backup"
 
-  if exist "%BACKUP_FILE%" (
-    for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmmss"') do set "TIMESTAMP=%%I"
-    set "BACKUP_FILE=%BACKUP_DIR%\%DB_NAME%_%TIMESTAMP%.backup"
-  )
-) else (
-  set "BACKUP_FILE=%OUTPUT_FILE%"
+call :ValidateOutputFile "%BACKUP_FILE%"
+if errorlevel 1 (
+  echo ERROR: Backup file must be a new .backup file inside the backups folder.
+  echo   %BACKUP_DIR%
+  echo.
+  if not "%NO_PAUSE%"=="1" pause
+  exit /b 1
+)
+
+if exist "%BACKUP_FILE%" (
+  echo ERROR: Backup file already exists. Existing backups are never overwritten.
+  echo   %BACKUP_FILE%
+  echo.
+  if not "%NO_PAUSE%"=="1" pause
+  exit /b 1
 )
 
 echo Environment file:
@@ -122,22 +131,35 @@ if "%DRY_RUN%"=="1" (
   exit /b 0
 )
 
-if not exist "%BACKUP_DIR%" mkdir "%BACKUP_DIR%"
-if errorlevel 1 (
-  echo ERROR: Cannot create the backup folder.
-  echo Fix: Check folder permission and free space.
-  echo.
-  if not "%NO_PAUSE%"=="1" pause
-  exit /b 1
+if not exist "%BACKUP_DIR%" (
+  mkdir "%BACKUP_DIR%"
+  if errorlevel 1 (
+    echo ERROR: Cannot create the backup folder.
+    echo Fix: Check folder permission and free space.
+    echo.
+    if not "%NO_PAUSE%"=="1" pause
+    exit /b 1
+  )
 )
 set "LOG_FILE=%BACKUP_DIR%\backup-log.txt"
 
-if not "%DB_PASSWORD%"=="" set "PGPASSWORD=%DB_PASSWORD%"
-
-"%PG_DUMP%" --host="%DB_HOST%" --port="%DB_PORT%" --username="%DB_USER%" --dbname="%DB_NAME%" --format=custom --file="%BACKUP_FILE%" --no-password
+set "BRAKECHECK_PG_DUMP=%PG_DUMP%"
+set "BRAKECHECK_DB_HOST=%DB_HOST%"
+set "BRAKECHECK_DB_PORT=%DB_PORT%"
+set "BRAKECHECK_DB_USER=%DB_USER%"
+set "BRAKECHECK_DB_NAME=%DB_NAME%"
+set "BRAKECHECK_BACKUP_FILE=%BACKUP_FILE%"
+set "BRAKECHECK_NO_PASSWORD=1"
+call :RunPgDump
 set "EXIT_CODE=%ERRORLEVEL%"
-set "PGPASSWORD="
 set "DB_PASSWORD="
+set "BRAKECHECK_PG_DUMP="
+set "BRAKECHECK_DB_HOST="
+set "BRAKECHECK_DB_PORT="
+set "BRAKECHECK_DB_USER="
+set "BRAKECHECK_DB_NAME="
+set "BRAKECHECK_BACKUP_FILE="
+set "BRAKECHECK_NO_PASSWORD="
 
 echo.
 if not "%EXIT_CODE%"=="0" (
@@ -183,3 +205,16 @@ exit /b 0
 :Log
 echo [%DATE% %TIME%] %~1>> "%LOG_FILE%"
 exit /b 0
+
+:ValidateOutputFile
+set "BRAKECHECK_BACKUP_ROOT=%BACKUP_DIR%"
+set "BRAKECHECK_OUTPUT_TARGET=%~1"
+powershell -NoProfile -Command "try { $root = [IO.Path]::GetFullPath($env:BRAKECHECK_BACKUP_ROOT).TrimEnd([char[]]'\/') + [IO.Path]::DirectorySeparatorChar; $target = [IO.Path]::GetFullPath($env:BRAKECHECK_OUTPUT_TARGET); if (-not $target.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { exit 1 }; if ([IO.Path]::GetExtension($target) -ine '.backup') { exit 2 } } catch { exit 3 }" >nul 2>nul
+set "VALIDATION_EXIT_CODE=%ERRORLEVEL%"
+set "BRAKECHECK_BACKUP_ROOT="
+set "BRAKECHECK_OUTPUT_TARGET="
+exit /b %VALIDATION_EXIT_CODE%
+
+:RunPgDump
+powershell -NoProfile -Command "$value = $env:DB_PASSWORD; if ($null -ne $value -and $value.Length -ge 2) { $first = [int]$value[0]; $last = [int]$value[$value.Length - 1]; if (($first -eq 39 -and $last -eq 39) -or ($first -eq 34 -and $last -eq 34)) { $value = $value.Substring(1, $value.Length - 2) } }; $env:PGPASSWORD = $null; if (-not [string]::IsNullOrEmpty($value)) { $env:PGPASSWORD = $value }; $arguments = @(('--host=' + $env:BRAKECHECK_DB_HOST), ('--port=' + $env:BRAKECHECK_DB_PORT), ('--username=' + $env:BRAKECHECK_DB_USER), ('--dbname=' + $env:BRAKECHECK_DB_NAME), '--format=custom', ('--file=' + $env:BRAKECHECK_BACKUP_FILE)); if ($env:BRAKECHECK_NO_PASSWORD -eq '1') { $arguments += '--no-password' }; & $env:BRAKECHECK_PG_DUMP $arguments; exit $LASTEXITCODE"
+exit /b %ERRORLEVEL%

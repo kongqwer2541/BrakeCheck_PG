@@ -28,7 +28,7 @@ Backup คือการสำรองข้อมูลไว้เป็น�
 
 Restore คือการนำไฟล์ Backup กลับเข้า database
 
-ระบบ BrakeCheck อ่านข้อมูลจาก PostgreSQL ตามค่า `DB_NAME` ในไฟล์ `.env` ไม่ได้อ่านไฟล์ backup โดยตรง ดังนั้นไฟล์ `database.backup` และ `attachments.zip` เป็นเพียงไฟล์ต้นทางสำหรับกู้ข้อมูลกลับเข้า PostgreSQL และโฟลเดอร์ไฟล์แนบ
+เมื่อเปิดระบบด้วย `scripts\start-server.bat` ระบบ BrakeCheck จะอ่าน PostgreSQL ตามค่า `DB_NAME` ในไฟล์ `.env` ไม่ได้อ่านไฟล์ backup โดยตรง ดังนั้นไฟล์ `database.backup` และ `attachments.zip` เป็นเพียงไฟล์ต้นทางสำหรับกู้ข้อมูลกลับเข้า PostgreSQL และโฟลเดอร์ไฟล์แนบ
 
 ข้อควรระวัง: Restore อาจเขียนทับข้อมูลปัจจุบัน ทำให้ข้อมูลที่เพิ่มหลังเวลา Backup หายได้ จึงต้องตรวจให้แน่ใจก่อนว่าใช้ไฟล์ Backup ถูกตัวและ restore ไปยัง database ถูกตัว
 
@@ -176,6 +176,19 @@ C:\Users\KONG\Documents\BrakeCheck_PG\backups\brakecheck_auto_2026-06-30_2230\at
 
 ถ้า backup สำคัญถูกเก็บไว้นอก repo หรือที่เก็บของบริษัท ให้ copy กลับมาใช้งานเฉพาะตอน restore
 
+ก่อน Restore ให้เลือกไฟล์ `database.backup` จากชุด Backup ที่ต้องการให้ชัดเจน ตรวจชื่อโฟลเดอร์และ `backup-info.txt` ในชุดเดียวกันก่อน แล้วเปิด PowerShell ที่โฟลเดอร์โปรเจกต์และรัน:
+
+```powershell
+$backupPath = (Read-Host "วางพาธเต็มของไฟล์ database.backup ที่ต้องการตรวจ").Trim().Trim('"')
+if (-not (Test-Path -LiteralPath $backupPath -PathType Leaf)) {
+  throw "ไม่พบไฟล์ Backup ตามพาธที่ระบุ"
+}
+Write-Host "กำลังตรวจไฟล์: $backupPath"
+& "C:\Program Files\PostgreSQL\17\bin\pg_restore.exe" --list $backupPath
+```
+
+ผลที่ผ่านต้องแสดงรายการ `TABLE`, `SEQUENCE` หรือ `TABLE DATA` โดยไม่มีข้อความ `error` หรือ `invalid archive` คำสั่งนี้อ่านไฟล์ที่ผู้ใช้ระบุเท่านั้นและยังไม่ Restore ข้อมูล
+
 ### ขั้นที่ 2: หยุดใช้งานระบบชั่วคราว
 
 ก่อน restore ให้แจ้งผู้ใช้ให้หยุดใช้งาน BrakeCheck ชั่วคราว เช่น:
@@ -203,20 +216,38 @@ scripts\auto-backup-system.bat
 - `attachments.zip`
 - `backup-info.txt`
 
+ถ้าชื่อโฟลเดอร์ลงท้ายด้วย `.incomplete` แปลว่า Backup ไม่สำเร็จครบชุด ห้ามนำโฟลเดอร์นั้นไป Restore ให้ตรวจข้อความ Error แล้วสร้าง Backup ชุดใหม่
+
 ### ขั้นที่ 4: เตรียม test database ใน PostgreSQL
 
-เปิด pgAdmin แล้วสร้าง database ทดสอบชื่อใหม่ เช่น `brakecheck_restore_test` โดยใช้ PostgreSQL 17
+เปิด pgAdmin แล้วสร้าง database ทดสอบชื่อใหม่บน `PostgreSQL 17` ตามขั้นตอนนี้:
 
-อย่าเลือก database จริง และอย่าใช้คำสั่งลบหรือเขียนทับ database เดิม
+1. ขยาย `PostgreSQL 17` แล้วคลิกขวา `Databases`
+2. เลือก `Create` > `Database`
+3. ตั้งชื่อไม่ซ้ำ เช่น `brakecheck_restore_test_20260722`
+4. ตั้ง Owner เป็น `postgres`
+5. กด Save แล้วตรวจว่าฐานใหม่ยังว่าง
 
-ถ้าใช้ PostgreSQL role ตาม `.env` เดิม ให้ IT ตรวจว่ามีสิทธิ์เชื่อมต่อ test database และสร้างตารางได้
+อย่าเลือก `brakecheck_pg` และอย่าใช้คำสั่งลบหรือเขียนทับ database เดิม ถ้าชื่อ test database มีอยู่แล้ว ให้สร้างชื่อใหม่แทนการลบฐานเดิม
 
 ### ขั้นที่ 5: Restore ไฟล์ database เข้า test database
 
-การ Restore เป็นขั้นตอน Manual เท่านั้น ให้ IT หรือผู้ที่ได้รับอนุมัติเปิด Command Prompt แล้วใช้คำสั่งรูปแบบนี้กับ database ทดสอบที่ว่าง:
+การ Restore เป็นขั้นตอน Manual เท่านั้น ให้ IT หรือผู้ที่ได้รับอนุมัติทำกับ database ทดสอบที่ว่าง
+
+ถ้าใช้ pgAdmin ให้คลิกขวา test database แล้วเลือก `Restore` จากนั้นตั้งค่า:
+
+- General: Format เป็น `Custom or tar`, เลือก `database.backup` และ Role name เป็น `postgres`
+- Data Options: เปิด `Owner` ในส่วน `Do not save` แต่ปิด `Privileges`
+- Query Options: ปิด `Include CREATE DATABASE statement`, `Clean before restore` และ `Include IF EXISTS clause`
+- Query Options: เปิด `Single transaction`
+- Options: เปิด `Exit on error` และปิด `Use SET SESSION AUTHORIZATION`
+
+การปิด `Privileges` ในส่วน `Do not save` หมายถึงให้ Restore สิทธิ์เดิมของ `brakecheck_app` กลับมาด้วย ก่อนกด Restore ให้ตรวจชื่อ database ด้านบนอีกครั้งว่าคือ test database
+
+ถ้าใช้ Command Prompt ให้ใช้คำสั่งรูปแบบนี้:
 
 ```text
-pg_restore --host=localhost --port=5432 --username=ชื่อ_user_postgresql --dbname=brakecheck_restore_test --no-owner --no-privileges "C:\Users\KONG\Documents\BrakeCheck_PG\backups\brakecheck_auto_2026-06-30_2230\database.backup"
+pg_restore --host=localhost --port=5432 --username=postgres --dbname=brakecheck_restore_test_20260722 --no-owner --single-transaction --exit-on-error "C:\Users\KONG\Documents\BrakeCheck_PG\backups\brakecheck_auto_2026-06-30_2230\database.backup"
 ```
 
 หลังรันคำสั่ง PostgreSQL จะถาม password ให้กรอกรหัสผ่านของเครื่องนั้นในช่องถามเท่านั้น
@@ -225,26 +256,46 @@ pg_restore --host=localhost --port=5432 --username=ชื่อ_user_postgresql 
 
 - คำสั่งนี้เป็นตัวอย่าง ให้เปลี่ยนชื่อ role, database และไฟล์ backup ให้ตรงกับเครื่องจริง
 - อย่าใส่รหัสผ่านจริงไว้ในคำสั่งหรือในเอกสาร
+- ใช้ `postgres` เฉพาะงาน Restore ส่วนแอปต้องกลับไปใช้ `brakecheck_app` ตาม `.env`
 - ถ้า restore เข้า test database ไม่ผ่าน ห้าม restore เข้า database จริง
 - ห้ามเติม `--clean`, `--create` หรือคำสั่งลบใด ๆ ในการซ้อม Restore
 
 ### ขั้นที่ 6: ให้ระบบชี้ไปที่ test database ชั่วคราว
 
-ก่อนแก้ `.env` ให้จดค่าเดิมของ `DB_NAME` ไว้ก่อน เช่น `brakecheck_pg`
+1. ปิด BrakeCheck Server และหน้าต่าง Terminal ของ Server เดิม
+2. ก่อนแก้ `.env` ให้จดค่าเดิมของ `DB_NAME` ไว้ก่อน เช่น `brakecheck_pg`
+3. ตรวจว่ามีค่า `DB_NAME` ค้างอยู่ใน Terminal, Windows User หรือ Windows Machine หรือไม่:
 
-จากนั้นแก้ `.env` ชั่วคราว:
-
-```text
-DB_NAME=brakecheck_restore_test
+```powershell
+Get-Item Env:DB_NAME -ErrorAction SilentlyContinue
+[Environment]::GetEnvironmentVariable('DB_NAME', 'User')
+[Environment]::GetEnvironmentVariable('DB_NAME', 'Machine')
 ```
 
-แล้วเปิด server:
+ถ้าพบบรรทัดใดมีชื่อ database แสดงอยู่ ให้ปิด Server เดิมก่อน และใช้ `scripts\start-server.bat` เปิดระบบทุกครั้ง เพราะปุ่มนี้จะกันค่าที่ค้างไม่ให้แทนค่าใน `.env` ถ้าจำเป็นต้องใช้ `npm start` โดยตรง ให้ IT ตรวจและลบค่า Windows User/Machine ที่ค้างก่อน
+
+สำหรับ Terminal ปัจจุบัน สามารถล้างเฉพาะค่าชั่วคราวได้ด้วยคำสั่งนี้:
+
+```powershell
+Remove-Item Env:DB_NAME -ErrorAction SilentlyContinue
+```
+
+4. แก้เฉพาะ `DB_NAME` ในไฟล์ `.env` ที่โฟลเดอร์หลักของโปรเจกต์ชั่วคราว:
+
+```text
+DB_NAME=brakecheck_restore_test_20260722
+```
+
+5. เปิด Server ใหม่:
 
 ```text
 scripts\start-server.bat
 ```
 
-หลังทดสอบเสร็จ ต้องเปลี่ยน `DB_NAME` กลับเป็น database จริง
+6. เปิด Chrome Incognito แล้ว Login ใหม่ อย่าใช้หน้าที่เปิดค้างจาก Server เดิม
+7. เปิด `/api/database/health` หลัง Login แล้วตรวจว่าช่อง `database` ตรงกับ test database ทุกตัวอักษร ถ้าไม่ตรง ห้ามทดสอบต่อ
+
+หน้าเว็บสามารถเปิดได้แม้ database เชื่อมต่อไม่ได้ จึงต้องใช้การ Login และ database health เป็นตัวยืนยัน หลังทดสอบเสร็จให้ปิด Server เปลี่ยน `DB_NAME` กลับเป็น `brakecheck_pg` ล้าง `Env:DB_NAME` อีกครั้ง แล้วเปิดด้วย `scripts\start-server.bat` จากนั้นตรวจ `/api/database/health` ว่าช่อง `database` กลับมาเป็น `brakecheck_pg` ก่อนใช้งานต่อ
 
 ### ขั้นที่ 7: ตรวจข้อมูลใน test database
 
@@ -263,31 +314,33 @@ scripts\start-server.bat
 
 ### ขั้นที่ 8: Restore ไฟล์แนบ
 
-ไฟล์แนบจริงอยู่ที่:
+สำหรับการซ้อม Restore ห้ามย้ายหรือเขียนทับไฟล์แนบจริงที่:
 
 ```text
 storage\attachments\
 ```
 
-ก่อนเอาไฟล์ backup กลับมา ให้เก็บโฟลเดอร์เดิมไว้ก่อน เช่น rename เป็น:
+ให้แตก `attachments.zip` ไปยังโฟลเดอร์ทดสอบ เช่น:
 
 ```text
-storage\attachments_before_restore
+backups\attachments_restore_test\
 ```
 
-จากนั้นแตกไฟล์:
+จากนั้นเปิด Query Tool ของ test database แล้วรันคำสั่งแบบอ่านอย่างเดียว:
 
-```text
-attachments.zip
+```sql
+SELECT
+  l.lot_number AS lot,
+  la.original_name,
+  la.stored_name,
+  la.file_size
+FROM public.lot_attachments AS la
+JOIN public.lots AS l ON l.id = la.lot_id
+WHERE la.deleted_at IS NULL
+ORDER BY la.id;
 ```
 
-แล้วนำโฟลเดอร์ `attachments` ที่แตกได้กลับไปไว้ที่:
-
-```text
-storage\attachments\
-```
-
-หลังแตกไฟล์แล้ว ให้ลองเปิด Lot ที่มีไฟล์แนบ เพื่อตรวจว่า PDF หรือรูปภาพเปิดได้
+นำค่า `stored_name` ไปเทียบกับชื่อไฟล์ที่แตกออกมา แล้วตรวจว่าแสดงหมายเลข Lot, ขนาดไฟล์มากกว่า 0 และเปิด PDF หรือรูปภาพได้จริง การนำไฟล์กลับไปไว้ที่ `storage\attachments\` ทำเฉพาะ Restore จริงหลังได้รับอนุมัติและเก็บโฟลเดอร์ปัจจุบันไว้แล้วเท่านั้น
 
 ### ขั้นที่ 9: ถ้า test database ผ่านแล้ว ค่อยวางแผน restore ของจริง
 
@@ -362,3 +415,15 @@ DB_NAME=brakecheck_pg
 - ไม่แสดงรหัสผ่านจริงหรือค่า `.env` จริงในบันทึกนี้
 - ไฟล์ backup อยู่ใน `backups/` และห้าม commit ขึ้น GitHub
 - test database นี้สร้างไว้เพื่อยืนยันว่า restore ใช้งานได้จริง
+
+### รอบวันที่ 2026-07-22
+
+ผลลัพธ์: ซ้อม Restore สำเร็จบน test database `brakecheck_restore_test_20260722`
+
+สิ่งที่ตรวจแล้ว:
+
+- Necessary tests ผ่าน: ตรวจชุด Backup, `pg_restore --list`, Restore database, Login, Users, Lot, Audit, ผลตรวจ, Export และไฟล์แนบ
+- Security tests ผ่าน: ไม่พบ password/secret ใน log หรือ Task Scheduler, Backup ถูก Git ignore และไม่ได้ Restore ทับ `brakecheck_pg`
+- Edge cases ผ่าน: Backup ซ้ำไม่เขียนทับไฟล์เดิม, ไม่ลบ Backup เก่า และ Dry Run ไม่สร้างไฟล์
+- แตก `attachments.zip` ในโฟลเดอร์ทดสอบและเทียบ `stored_name` กับ Lot โดยไม่เขียนทับ `storage\attachments`
+- หลังทดสอบเปลี่ยน `DB_NAME` กลับเป็น `brakecheck_pg`

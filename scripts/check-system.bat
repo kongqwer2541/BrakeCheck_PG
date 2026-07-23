@@ -4,6 +4,7 @@ setlocal
 set "PROJECT_ROOT=%~dp0.."
 set "SERVER_DIR=%PROJECT_ROOT%\server"
 set "ENV_FILE=%PROJECT_ROOT%\.env"
+set "POSTGRES17_BIN=%ProgramFiles%\PostgreSQL\17\bin"
 
 echo ========================================
 echo BrakeCheck - Check System
@@ -58,16 +59,24 @@ echo.
 echo [5] PostgreSQL tools
 where psql >nul 2>nul
 if errorlevel 1 (
-  echo   ERROR: psql not found.
-  echo   Fix: Install PostgreSQL 17 or add its bin folder to PATH.
+  if exist "%POSTGRES17_BIN%\psql.exe" (
+    echo   OK: psql found in the standard PostgreSQL 17 folder.
+  ) else (
+    echo   ERROR: psql not found.
+    echo   Fix: Install PostgreSQL 17 or add its bin folder to PATH.
+  )
 ) else (
   for /f "tokens=*" %%V in ('psql --version') do echo   OK: %%V
 )
 
 where pg_dump >nul 2>nul
 if errorlevel 1 (
-  echo   ERROR: pg_dump not found.
-  echo   Fix: Install PostgreSQL 17 tools or add its bin folder to PATH.
+  if exist "%POSTGRES17_BIN%\pg_dump.exe" (
+    echo   OK: pg_dump found in the standard PostgreSQL 17 folder.
+  ) else (
+    echo   ERROR: pg_dump not found.
+    echo   Fix: Install PostgreSQL 17 tools or add its bin folder to PATH.
+  )
 ) else (
   echo   OK: pg_dump found.
 )

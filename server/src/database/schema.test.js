@@ -17,6 +17,12 @@ const userAuditActionMigrationUrl = new URL(
 );
 const userAuditActionMigrationSql = await readFile(userAuditActionMigrationUrl, 'utf8');
 const executableUserAuditActionMigrationSql = userAuditActionMigrationSql.replace(/^\s*--.*$/gm, '');
+const backupSequenceMigrationUrl = new URL(
+  './migrations/postgresql/phase-7-backup-sequence-read.sql',
+  import.meta.url
+);
+const backupSequenceMigrationSql = await readFile(backupSequenceMigrationUrl, 'utf8');
+const executableBackupSequenceMigrationSql = backupSequenceMigrationSql.replace(/^\s*--.*$/gm, '');
 
 const expectedTables = [
   'users',
@@ -175,7 +181,7 @@ test('PostgreSQL baseline grants runtime access without granting schema creation
   );
   assert.match(
     schemaSql,
-    /GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO brakecheck_app/i
+    /GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO brakecheck_app/i
   );
   assert.match(schemaSql, /GRANT DELETE ON TABLE public\.sampling_rules TO brakecheck_app/i);
   assert.doesNotMatch(schemaSql, /GRANT [^;]*DELETE[^;]*ON ALL TABLES/i);
@@ -184,4 +190,22 @@ test('PostgreSQL baseline grants runtime access without granting schema creation
     /GRANT (?:UPDATE|DELETE)[^;]*public\.(?:user_audit_logs|lot_audit_logs|system_setting_audit_logs)/i
   );
   assert.doesNotMatch(schemaSql, /GRANT\s+(?:CREATE|ALL).*TO brakecheck_app/i);
+});
+
+test('backup sequence migration grants read access without changing data', () => {
+  assert.match(executableBackupSequenceMigrationSql, /^\s*BEGIN;/i);
+  assert.match(
+    executableBackupSequenceMigrationSql,
+    /current_database\(\)\s*<>\s*'brakecheck_pg'/i
+  );
+  assert.match(executableBackupSequenceMigrationSql, /current_user\s*=\s*'brakecheck_app'/i);
+  assert.match(
+    executableBackupSequenceMigrationSql,
+    /GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO brakecheck_app/i
+  );
+  assert.doesNotMatch(
+    executableBackupSequenceMigrationSql,
+    /\b(?:DROP|TRUNCATE|DELETE|UPDATE|INSERT|CREATE\s+DATABASE)\b/i
+  );
+  assert.match(executableBackupSequenceMigrationSql, /COMMIT;\s*$/i);
 });

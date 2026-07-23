@@ -26,11 +26,15 @@ echo   1. PostgreSQL database
 echo   2. storage\attachments files
 echo.
 
-if not "%DRY_RUN%"=="1" if not exist "%BACKUP_DIR%" mkdir "%BACKUP_DIR%"
-if not "%DRY_RUN%"=="1" if errorlevel 1 (
-  echo ERROR: Cannot create backup folder.
-  echo Fix: Check permission and free space.
-  exit /b 1
+if not "%DRY_RUN%"=="1" (
+  if not exist "%BACKUP_DIR%" (
+    mkdir "%BACKUP_DIR%"
+    if errorlevel 1 (
+      echo ERROR: Cannot create backup folder.
+      echo Fix: Check permission and free space.
+      exit /b 1
+    )
+  )
 )
 
 if not exist "%DB_BACKUP_SCRIPT%" (
@@ -51,17 +55,30 @@ if not exist "%ATTACHMENTS_DIR%" (
   exit /b 1
 )
 
-for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set "TIMESTAMP=%%I"
-set "BACKUP_SET_DIR=%BACKUP_DIR%\brakecheck_auto_%TIMESTAMP%"
+for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set "BACKUP_SET_DIR=%BACKUP_DIR%\brakecheck_auto_%%I"
+set "BACKUP_WORK_DIR=%BACKUP_SET_DIR%.incomplete"
+if exist "%BACKUP_SET_DIR%" call :UsePreciseBackupFolder
+if exist "%BACKUP_WORK_DIR%" call :UsePreciseBackupFolder
 
 if exist "%BACKUP_SET_DIR%" (
-  for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmmss"') do set "TIMESTAMP=%%I"
-  set "BACKUP_SET_DIR=%BACKUP_DIR%\brakecheck_auto_%TIMESTAMP%"
+  echo ERROR: A backup set with the generated name already exists.
+  call :Log "FAILED: generated backup set folder already exists"
+  echo.
+  if not "%NO_PAUSE%"=="1" pause
+  exit /b 1
 )
 
-set "DATABASE_TARGET=%BACKUP_SET_DIR%\database.backup"
-set "ATTACHMENTS_TARGET=%BACKUP_SET_DIR%\attachments.zip"
-set "INFO_FILE=%BACKUP_SET_DIR%\backup-info.txt"
+if exist "%BACKUP_WORK_DIR%" (
+  echo ERROR: An incomplete backup set with the generated name already exists.
+  call :Log "FAILED: generated incomplete backup folder already exists"
+  echo.
+  if not "%NO_PAUSE%"=="1" pause
+  exit /b 1
+)
+
+set "DATABASE_TARGET=%BACKUP_WORK_DIR%\database.backup"
+set "ATTACHMENTS_TARGET=%BACKUP_WORK_DIR%\attachments.zip"
+set "INFO_FILE=%BACKUP_WORK_DIR%\backup-info.txt"
 set "LOG_FILE=%BACKUP_DIR%\backup-log.txt"
 
 echo Backup set folder:
@@ -70,30 +87,24 @@ echo.
 
 if "%DRY_RUN%"=="1" (
   echo DRY RUN only. No backup folder or files will be created.
-  echo Would create:
-  echo   %DATABASE_TARGET%
-  echo   %ATTACHMENTS_TARGET%
-  echo   %INFO_FILE%
+  echo Would create after successful completion:
+  echo   %BACKUP_SET_DIR%\database.backup
+  echo   %BACKUP_SET_DIR%\attachments.zip
+  echo   %BACKUP_SET_DIR%\backup-info.txt
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b 0
 )
 
-mkdir "%BACKUP_SET_DIR%"
+mkdir "%BACKUP_WORK_DIR%"
 if errorlevel 1 (
-  echo ERROR: Cannot create backup folder.
+  echo ERROR: Cannot create incomplete backup folder.
   echo Fix: Check permission and free space.
   call :Log "FAILED: cannot create backup set folder"
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b 1
 )
-
-echo Created at: %DATE% %TIME%> "%INFO_FILE%"
-echo Project root: %PROJECT_ROOT%>> "%INFO_FILE%"
-echo Database backup: database.backup>> "%INFO_FILE%"
-echo Attachments backup: attachments.zip>> "%INFO_FILE%"
-echo Restore note: Restore database to a test database first. Do not restore automatically.>> "%INFO_FILE%"
 
 echo [1/2] Backup database
 call "%DB_BACKUP_SCRIPT%" --no-pause --output-file "%DATABASE_TARGET%"
@@ -102,7 +113,8 @@ set "DB_EXIT_CODE=%ERRORLEVEL%"
 echo.
 if not "%DB_EXIT_CODE%"=="0" (
   echo System backup stopped because database backup failed.
-  echo No complete backup set was created.
+  echo The unfinished files remain in this clearly marked folder:
+  echo   %BACKUP_WORK_DIR%
   call :Log "FAILED: database backup exit code %DB_EXIT_CODE%"
   echo.
   if not "%NO_PAUSE%"=="1" pause
@@ -132,10 +144,10 @@ set "ATTACHMENTS_EXIT_CODE=%ERRORLEVEL%"
 echo.
 if not "%ATTACHMENTS_EXIT_CODE%"=="0" (
   echo Attachment backup failed with error code %ATTACHMENTS_EXIT_CODE%.
-  echo No complete backup set was created.
+  echo The unfinished files remain in this clearly marked folder:
+  echo   %BACKUP_WORK_DIR%
   echo Fix: Check permission and free space.
   call :Log "FAILED: attachment backup exit code %ATTACHMENTS_EXIT_CODE%"
-  if exist "%ATTACHMENTS_TARGET%" del "%ATTACHMENTS_TARGET%"
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b %ATTACHMENTS_EXIT_CODE%
@@ -152,7 +164,37 @@ if not exist "%ATTACHMENTS_TARGET%" (
 for %%F in ("%ATTACHMENTS_TARGET%") do if %%~zF LEQ 0 (
   echo ERROR: Attachment backup file is empty.
   call :Log "FAILED: attachment backup file is empty"
-  if exist "%ATTACHMENTS_TARGET%" del "%ATTACHMENTS_TARGET%"
+  echo.
+  if not "%NO_PAUSE%"=="1" pause
+  exit /b 1
+)
+
+echo Created at: %DATE% %TIME%> "%INFO_FILE%"
+echo Project root: %PROJECT_ROOT%>> "%INFO_FILE%"
+echo Database backup: database.backup>> "%INFO_FILE%"
+echo Attachments backup: attachments.zip>> "%INFO_FILE%"
+echo Restore note: Restore database to a test database first. Do not restore automatically.>> "%INFO_FILE%"
+
+if not exist "%INFO_FILE%" (
+  echo ERROR: Backup information file was not created.
+  call :Log "FAILED: backup information file is missing"
+  echo.
+  if not "%NO_PAUSE%"=="1" pause
+  exit /b 1
+)
+
+for %%F in ("%INFO_FILE%") do if %%~zF LEQ 0 (
+  echo ERROR: Backup information file is empty.
+  call :Log "FAILED: backup information file is empty"
+  echo.
+  if not "%NO_PAUSE%"=="1" pause
+  exit /b 1
+)
+
+move "%BACKUP_WORK_DIR%" "%BACKUP_SET_DIR%" >nul
+if errorlevel 1 (
+  echo ERROR: Backup files were created but the backup set could not be finalized.
+  call :Log "FAILED: incomplete backup folder could not be finalized"
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b 1
@@ -183,4 +225,9 @@ exit /b 0
 :Log
 echo [%DATE% %TIME%] %~1>> "%LOG_FILE%"
 if errorlevel 1 exit /b 1
+exit /b 0
+
+:UsePreciseBackupFolder
+for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmmssfff"') do set "BACKUP_SET_DIR=%BACKUP_DIR%\brakecheck_auto_%%I"
+set "BACKUP_WORK_DIR=%BACKUP_SET_DIR%.incomplete"
 exit /b 0

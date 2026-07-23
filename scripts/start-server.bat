@@ -83,6 +83,13 @@ echo Starting server...
 echo Press Ctrl+C in this window to stop the server.
 echo.
 
+rem Ensure dotenv reads the database settings from the project .env file.
+set "DB_HOST="
+set "DB_PORT="
+set "DB_NAME="
+set "DB_USER="
+set "DB_PASSWORD="
+
 node "%SERVER_ENTRY%"
 set "EXIT_CODE=!ERRORLEVEL!"
 
