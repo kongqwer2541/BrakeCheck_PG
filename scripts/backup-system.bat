@@ -41,17 +41,30 @@ if not exist "%ATTACHMENTS_DIR%" (
   exit /b 1
 )
 
-for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set "TIMESTAMP=%%I"
-set "BACKUP_SET_DIR=%BACKUP_DIR%\brakecheck_manual_%TIMESTAMP%"
+for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmm"') do set "BACKUP_SET_DIR=%BACKUP_DIR%\brakecheck_manual_%%I"
+set "BACKUP_WORK_DIR=%BACKUP_SET_DIR%.incomplete"
+if exist "%BACKUP_SET_DIR%" call :UsePreciseBackupFolder
+if exist "%BACKUP_WORK_DIR%" call :UsePreciseBackupFolder
 
 if exist "%BACKUP_SET_DIR%" (
-  for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmmss"') do set "TIMESTAMP=%%I"
-  set "BACKUP_SET_DIR=%BACKUP_DIR%\brakecheck_manual_%TIMESTAMP%"
+  echo ERROR: A backup set with the generated name already exists.
+  echo Try again in a moment. Existing backups are never overwritten.
+  echo.
+  if not "%NO_PAUSE%"=="1" pause
+  exit /b 1
 )
 
-set "DATABASE_TARGET=%BACKUP_SET_DIR%\database.backup"
-set "ATTACHMENTS_TARGET=%BACKUP_SET_DIR%\attachments.zip"
-set "INFO_FILE=%BACKUP_SET_DIR%\backup-info.txt"
+if exist "%BACKUP_WORK_DIR%" (
+  echo ERROR: An incomplete backup set with the generated name already exists.
+  echo Try again in a moment. Existing backup files are never overwritten.
+  echo.
+  if not "%NO_PAUSE%"=="1" pause
+  exit /b 1
+)
+
+set "DATABASE_TARGET=%BACKUP_WORK_DIR%\database.backup"
+set "ATTACHMENTS_TARGET=%BACKUP_WORK_DIR%\attachments.zip"
+set "INFO_FILE=%BACKUP_WORK_DIR%\backup-info.txt"
 
 echo Backup set folder:
 echo   %BACKUP_SET_DIR%
@@ -59,27 +72,29 @@ echo.
 
 if "%DRY_RUN%"=="1" (
   echo DRY RUN only. No backup folder or files will be created.
-  echo Would create:
-  echo   %DATABASE_TARGET%
-  echo   %ATTACHMENTS_TARGET%
-  echo   %INFO_FILE%
+  echo Would create after successful completion:
+  echo   %BACKUP_SET_DIR%\database.backup
+  echo   %BACKUP_SET_DIR%\attachments.zip
+  echo   %BACKUP_SET_DIR%\backup-info.txt
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b 0
 )
 
-if not exist "%BACKUP_DIR%" mkdir "%BACKUP_DIR%"
-if errorlevel 1 (
-  echo ERROR: Cannot create backup folder.
-  echo Fix: Check permission and free space.
-  echo.
-  if not "%NO_PAUSE%"=="1" pause
-  exit /b 1
+if not exist "%BACKUP_DIR%" (
+  mkdir "%BACKUP_DIR%"
+  if errorlevel 1 (
+    echo ERROR: Cannot create backup folder.
+    echo Fix: Check permission and free space.
+    echo.
+    if not "%NO_PAUSE%"=="1" pause
+    exit /b 1
+  )
 )
 
-mkdir "%BACKUP_SET_DIR%"
+mkdir "%BACKUP_WORK_DIR%"
 if errorlevel 1 (
-  echo ERROR: Cannot create backup set folder.
+  echo ERROR: Cannot create incomplete backup set folder.
   echo Fix: Check permission and free space.
   echo.
   if not "%NO_PAUSE%"=="1" pause
@@ -93,7 +108,8 @@ set "DB_EXIT_CODE=%ERRORLEVEL%"
 echo.
 if not "%DB_EXIT_CODE%"=="0" (
   echo System backup stopped because database backup failed.
-  echo No complete backup set was created.
+  echo The unfinished files remain in this clearly marked folder:
+  echo   %BACKUP_WORK_DIR%
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b %DB_EXIT_CODE%
@@ -120,7 +136,8 @@ set "ATTACHMENTS_EXIT_CODE=%ERRORLEVEL%"
 echo.
 if not "%ATTACHMENTS_EXIT_CODE%"=="0" (
   echo Attachment backup failed with error code %ATTACHMENTS_EXIT_CODE%.
-  echo No complete backup set was created.
+  echo The unfinished files remain in this clearly marked folder:
+  echo   %BACKUP_WORK_DIR%
   echo.
   if not "%NO_PAUSE%"=="1" pause
   exit /b %ATTACHMENTS_EXIT_CODE%
@@ -146,7 +163,37 @@ echo Database backup: database.backup>> "%INFO_FILE%"
 echo Attachments backup: attachments.zip>> "%INFO_FILE%"
 echo Restore note: Restore database to a test database first. Do not restore automatically.>> "%INFO_FILE%"
 
+if not exist "%INFO_FILE%" (
+  echo ERROR: Backup information file was not created.
+  echo The unfinished files remain in:
+  echo   %BACKUP_WORK_DIR%
+  echo.
+  if not "%NO_PAUSE%"=="1" pause
+  exit /b 1
+)
+
+for %%F in ("%INFO_FILE%") do if %%~zF LEQ 0 (
+  echo ERROR: Backup information file is empty.
+  echo The unfinished files remain in:
+  echo   %BACKUP_WORK_DIR%
+  echo.
+  if not "%NO_PAUSE%"=="1" pause
+  exit /b 1
+)
+
+move "%BACKUP_WORK_DIR%" "%BACKUP_SET_DIR%" >nul
+if errorlevel 1 (
+  echo ERROR: Backup files were created but the backup set could not be finalized.
+  echo The unfinished files remain in:
+  echo   %BACKUP_WORK_DIR%
+  echo.
+  if not "%NO_PAUSE%"=="1" pause
+  exit /b 1
+)
+
 echo Full system backup completed successfully.
+echo Folder:
+echo   %BACKUP_SET_DIR%
 echo.
 echo Created files:
 echo   database.backup
@@ -156,4 +203,9 @@ echo.
 echo Do not commit backup files to GitHub.
 echo.
 if not "%NO_PAUSE%"=="1" pause
+exit /b 0
+
+:UsePreciseBackupFolder
+for /f %%I in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HHmmssfff"') do set "BACKUP_SET_DIR=%BACKUP_DIR%\brakecheck_manual_%%I"
+set "BACKUP_WORK_DIR=%BACKUP_SET_DIR%.incomplete"
 exit /b 0

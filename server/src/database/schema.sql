@@ -554,7 +554,7 @@ GRANT INSERT ON TABLE
   public.system_setting_audit_logs
 TO brakecheck_app;
 GRANT DELETE ON TABLE public.sampling_rules TO brakecheck_app;
-GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO brakecheck_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO brakecheck_app;
 REVOKE ALL ON FUNCTION public.set_updated_at() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.set_updated_at() TO brakecheck_app;
 
