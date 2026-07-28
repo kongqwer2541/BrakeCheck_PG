@@ -30,7 +30,8 @@ const menuGroups = [
       { id: 'history', label: 'ประวัติ & NG', icon: '↺' },
       { id: 'export', label: 'ส่งออก', icon: '⇩' },
       { id: 'exportDimension', label: 'Export Data', icon: '⇩' },
-      { id: 'results', label: 'Results', icon: '⌕' }
+      { id: 'results', label: 'Results', icon: '⌕' },
+      { id: 'summary', label: 'Summary', icon: '▤' }
     ]
   },
   {

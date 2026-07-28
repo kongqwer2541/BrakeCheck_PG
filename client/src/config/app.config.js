@@ -9,6 +9,7 @@ export const pagePermissions = {
   export: ['head', 'assistant'],
   exportDimension: ['head', 'assistant'],
   results: ['head', 'assistant', 'officer'],
+  summary: ['head', 'assistant'],
   settings: ['head', 'assistant'],
   history: ['head', 'assistant', 'officer'],
   importExcel: ['head', 'assistant'],

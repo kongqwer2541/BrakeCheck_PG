@@ -10,6 +10,7 @@ export const appRoutes = {
   export: { action: 'exportReport' },
   exportDimension: { action: 'exportDimension' },
   results: { action: 'results' },
+  summary: { action: 'summary' },
   history: { action: 'history' },
   settings: { action: 'settings' }
 };

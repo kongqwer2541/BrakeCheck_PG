@@ -13,6 +13,7 @@ import { lotRouter } from './routes/lot.routes.js';
 import { reportExportRouter } from './routes/report-export.routes.js';
 import { resultsRouter } from './routes/results.routes.js';
 import { settingsRouter } from './routes/settings.routes.js';
+import { summaryRouter } from './routes/summary.routes.js';
 import { userRouter } from './routes/user.routes.js';
 import { env } from './config/env.js';
 import { errorMiddleware } from './middlewares/error.middleware.js';
@@ -76,6 +77,7 @@ app.use('/api/lots', lotRouter);
 app.use('/api/reports/export', reportExportRouter);
 app.use('/api/results', resultsRouter);
 app.use('/api/settings', settingsRouter);
+app.use('/api/summary', summaryRouter);
 app.use('/api/users', userRouter);
 
 app.use('/api', (req, res) => {
