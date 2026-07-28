@@ -36,6 +36,7 @@ import {
 } from './flows/export-dimension-preview.flow.js';
 import { createExportDimensionActions } from './flows/export-dimension-actions.flow.js';
 import { getResultsLots } from './services/results.api.js';
+import { getQualitySummary, getQualitySummaryLots } from './services/summary.api.js';
 import {
   createInspectionTopic,
   deactivateInspectionTopic,
@@ -87,6 +88,7 @@ import { bindLotEditPage, renderLotEditPage } from './pages/lot-edit.page.js';
 import { bindLoginPage, renderLoginPage } from './pages/login.page.js';
 import { bindManualLotPage, renderManualLotPage } from './pages/manual-lot.page.js';
 import { bindResultsPage, defaultResultsPageSize, renderResultsPage } from './pages/results.page.js';
+import { bindSummaryPage, renderSummaryPage } from './pages/summary.page.js';
 import { bindSystemSettingsPage, renderSystemSettingsPage } from './pages/system-settings.page.js';
 import { bindUsersPage, renderUsersPage } from './pages/users.page.js';
 import {
@@ -112,6 +114,7 @@ import {
 const app = document.querySelector('#app');
 
 let currentUser = null;
+let currentMainPage = '';
 let users = [];
 let selectedUserId = null;
 let resetUserId = null;
@@ -205,6 +208,25 @@ const resultsState = {
   loading: false,
   error: '',
   requestId: 0
+};
+const summaryState = {
+  filters: {
+    startDate: '',
+    endDate: '',
+    modelSearch: '',
+    grade: '',
+    topicSource: 'all',
+    years: []
+  },
+  data: null,
+  detail: null,
+  detailRequest: null,
+  loading: false,
+  detailLoading: false,
+  error: '',
+  detailError: '',
+  requestId: 0,
+  detailRequestId: 0
 };
 const exportDimensionPreviewState = createExportDimensionPreviewState(
   getDefaultExportDimensionFilters()
@@ -456,6 +478,23 @@ function resetClientState() {
   resultsState.loading = false;
   resultsState.error = '';
   resultsState.requestId = 0;
+  summaryState.filters = {
+    startDate: '',
+    endDate: '',
+    modelSearch: '',
+    grade: '',
+    topicSource: 'all',
+    years: []
+  };
+  summaryState.data = null;
+  summaryState.detail = null;
+  summaryState.detailRequest = null;
+  summaryState.loading = false;
+  summaryState.detailLoading = false;
+  summaryState.error = '';
+  summaryState.detailError = '';
+  summaryState.requestId = 0;
+  summaryState.detailRequestId = 0;
   selectedLotNumber = '';
   lotEditLot = null;
   lotEditValues = null;
@@ -513,7 +552,7 @@ function handleApiAccessError(error, showForbiddenMessage) {
 async function restoreLastPage() {
   const lastPage = getLastPage();
   const savedInspection = getLotInspectionLocation();
-  const inspectionParentPages = ['barcode', 'approval', 'export', 'exportDimension', 'results', 'dimension', 'packing'];
+  const inspectionParentPages = ['barcode', 'approval', 'export', 'exportDimension', 'results', 'summary', 'dimension', 'packing'];
 
   if (savedInspection
     && inspectionParentPages.includes(lastPage)
@@ -568,6 +607,11 @@ async function restoreLastPage() {
     return;
   }
 
+  if (lastPage === 'summary' && canOpenPage('summary')) {
+    loadSummary();
+    return;
+  }
+
   if (lastPage === 'history' && canOpenPage('history')) {
     loadHistory();
     return;
@@ -583,11 +627,13 @@ async function restoreLastPage() {
 }
 
 function showLogin(message = '') {
+  currentMainPage = '';
   app.innerHTML = renderLoginPage({ message });
   bindLoginPage({ onLogin: handleLogin });
 }
 
 function showChangePassword(message = '') {
+  currentMainPage = '';
   app.innerHTML = renderChangePasswordPage({
     user: currentUser,
     message
@@ -596,6 +642,7 @@ function showChangePassword(message = '') {
 }
 
 function showMainPage({ activePage, pageTitle, children, bindPage }) {
+  currentMainPage = activePage;
   const approvalBadgeCount = Number(
     approvalQueueData.summary
       ? approvalQueueData.badgeCount
@@ -776,6 +823,37 @@ function showResults({ error = resultsState.error, isLoading = resultsState.load
       onPageChange: handleResultsPageChange,
       onRefresh: handleResultsRefresh,
       onOpenLot: handleOpenResultsLot
+    })
+  });
+}
+
+function showSummary({ error = summaryState.error, isLoading = summaryState.loading } = {}) {
+  if (!canOpenPage('summary')) {
+    rememberLastPage('dashboard');
+    showDashboard({ error: permissionDeniedMessage });
+    return;
+  }
+
+  summaryState.error = error;
+  rememberLastPage('summary');
+  showMainPage({
+    activePage: 'summary',
+    pageTitle: 'Summary',
+    children: renderSummaryPage({
+      data: summaryState.data,
+      isLoading,
+      error,
+      detail: summaryState.detail,
+      detailLoading: summaryState.detailLoading
+    }),
+    bindPage: () => bindSummaryPage({
+      onApplyFilters: handleSummaryApplyFilters,
+      onRefresh: handleSummaryRefresh,
+      onTopicSourceChange: handleSummaryTopicSourceChange,
+      onYearsChange: handleSummaryYearsChange,
+      onOpenDetails: handleSummaryOpenDetails,
+      onDetailPageChange: handleSummaryDetailPageChange,
+      onOpenLot: handleOpenSummaryLot
     })
   });
 }
@@ -1252,7 +1330,7 @@ function showLotLookup() {
 
 function showLotInspectionPage() {
   const lastPage = getLastPage();
-  const activeInspectionPage = ['approval', 'export', 'exportDimension', 'results', 'dimension', 'packing'].includes(lastPage) ? lastPage : 'barcode';
+  const activeInspectionPage = ['approval', 'export', 'exportDimension', 'results', 'summary', 'dimension', 'packing'].includes(lastPage) ? lastPage : 'barcode';
 
   showMainPage({
     activePage: activeInspectionPage,
@@ -1279,7 +1357,9 @@ function showLotInspectionPage() {
       isSaving: lotInspectionSaving,
       isAttachmentUploading: lotAttachmentUploading,
       isReadOnly: lotInspectionReadOnly,
-      backLabel: lotInspectionReadOnly ? 'กลับไป Results' : 'กลับไปค้นหา Lot'
+      backLabel: activeInspectionPage === 'summary'
+        ? 'Back to Summary'
+        : lotInspectionReadOnly ? 'กลับไป Results' : 'กลับไปค้นหา Lot'
     }),
     bindPage: () => bindLotInspectionPage({
       onTabChange: handleLotInspectionTabChange,
@@ -1302,6 +1382,8 @@ function showLotInspectionPage() {
             ? handleBackToExportDimension
             : activeInspectionPage === 'results'
               ? handleBackToResults
+              : activeInspectionPage === 'summary'
+                ? handleBackToSummary
               : activeInspectionPage === 'dimension' || activeInspectionPage === 'packing'
                 ? handleBackToInspectionQueue
                 : handleBackToLotLookup
@@ -1553,6 +1635,7 @@ const navigationHandlers = {
   exportReport: () => loadExportReport(),
   exportDimension: () => showExportDimension(),
   results: () => loadResults(),
+  summary: () => loadSummary(),
   history: () => loadHistory(),
   settings: () => loadSystemSettings()
 };
@@ -2022,6 +2105,220 @@ function handleOpenResultsLot(lotNumber) {
   rememberLastPage('results');
   lotInspectionReadOnly = true;
   loadLotInspection(lotNumber, 'dimension');
+}
+
+function getSummaryDetailTitle(view) {
+  const titles = {
+    final: 'Final Lots',
+    approved: 'Approved Lots',
+    confirmed_ng: 'Confirmed NG Lots',
+    unfinished: 'Unfinished Lots',
+    trend: 'Trend Lots',
+    topic: 'Topic Lots',
+    model: 'Model Lots',
+    year: 'Yearly Lots'
+  };
+
+  return titles[view] || 'Summary Detail';
+}
+
+function createSummaryDetailRequest(request) {
+  const requestedDetail = typeof request === 'string' ? { view: request } : (request || {});
+  const view = requestedDetail.view === 'ng' || requestedDetail.view === 'ng-rate'
+    ? 'confirmed_ng'
+    : requestedDetail.view;
+
+  if (!view) {
+    return null;
+  }
+
+  const detailRequest = {
+    ...summaryState.filters,
+    ...requestedDetail,
+    view,
+    page: 1,
+    pageSize: 50
+  };
+
+  if (view === 'topic' && !detailRequest.rankGroup) {
+    detailRequest.rankGroup = detailRequest.topicName ? 'selected' : 'other';
+  }
+
+  if (view === 'model' && !detailRequest.rankGroup) {
+    detailRequest.rankGroup = detailRequest.modelName ? 'selected' : 'other';
+  }
+
+  return detailRequest;
+}
+
+function handleSummaryApplyFilters(filters) {
+  summaryState.filters = {
+    ...summaryState.filters,
+    ...filters,
+    years: [...summaryState.filters.years]
+  };
+  return loadSummary();
+}
+
+function handleSummaryRefresh() {
+  return loadSummary();
+}
+
+function handleSummaryTopicSourceChange(source) {
+  summaryState.filters = {
+    ...summaryState.filters,
+    topicSource: source || 'all'
+  };
+  return loadSummary();
+}
+
+function handleSummaryYearsChange(years) {
+  summaryState.filters = {
+    ...summaryState.filters,
+    years: (Array.isArray(years) ? years : [])
+      .map(Number)
+      .filter(Number.isFinite)
+      .slice(0, 3)
+  };
+  return loadSummary();
+}
+
+function handleSummaryOpenDetails(request) {
+  const detailRequest = createSummaryDetailRequest(request);
+
+  if (!detailRequest) {
+    return;
+  }
+
+  summaryState.detailRequest = detailRequest;
+  summaryState.detail = {
+    view: detailRequest.view,
+    title: getSummaryDetailTitle(detailRequest.view),
+    items: [],
+    page: detailRequest.page,
+    totalItems: 0,
+    totalPages: 1,
+    error: ''
+  };
+  return loadSummaryDetails();
+}
+
+function handleSummaryDetailPageChange(page) {
+  if (!summaryState.detailRequest || !Number.isInteger(page) || page < 1) {
+    return;
+  }
+
+  const totalPages = Number(summaryState.detail?.totalPages || 1);
+  if (page > totalPages || page === summaryState.detailRequest.page) {
+    return;
+  }
+
+  summaryState.detailRequest = {
+    ...summaryState.detailRequest,
+    page
+  };
+  return loadSummaryDetails();
+}
+
+async function loadSummary() {
+  const requestId = ++summaryState.requestId;
+  summaryState.detailRequestId += 1;
+  summaryState.loading = true;
+  summaryState.detailLoading = false;
+  summaryState.error = '';
+  summaryState.detailError = '';
+  summaryState.detail = null;
+  summaryState.detailRequest = null;
+  showSummary({ error: '', isLoading: true });
+
+  try {
+    const result = await getQualitySummary(summaryState.filters);
+    if (requestId !== summaryState.requestId || currentMainPage !== 'summary') return;
+
+    summaryState.filters = {
+      ...summaryState.filters,
+      ...result.filters,
+      years: [...result.filters.years]
+    };
+    summaryState.data = result;
+    summaryState.detail = null;
+    summaryState.loading = false;
+    showSummary({ error: '', isLoading: false });
+  } catch (error) {
+    if (requestId !== summaryState.requestId || currentMainPage !== 'summary') return;
+
+    summaryState.loading = false;
+    summaryState.error = error.message;
+
+    if (handleApiAccessError(error, (message) => {
+      showSummary({ error: message, isLoading: false });
+    })) {
+      return;
+    }
+
+    showSummary({ error: error.message, isLoading: false });
+  }
+}
+
+async function loadSummaryDetails() {
+  if (!summaryState.detailRequest) {
+    return;
+  }
+
+  const requestId = ++summaryState.detailRequestId;
+  const detailRequest = { ...summaryState.detailRequest };
+  summaryState.detailLoading = true;
+  summaryState.detailError = '';
+  summaryState.detail = {
+    ...summaryState.detail,
+    page: detailRequest.page,
+    isLoading: true,
+    error: ''
+  };
+  showSummary();
+
+  try {
+    const result = await getQualitySummaryLots(detailRequest);
+    if (requestId !== summaryState.detailRequestId || currentMainPage !== 'summary') return;
+
+    const detailSummary = result.summary || {};
+    summaryState.detailLoading = false;
+    summaryState.detail = {
+      ...summaryState.detail,
+      items: Array.isArray(result.items) ? result.items : [],
+      page: Number(detailSummary.page || detailRequest.page || 1),
+      totalItems: Number(detailSummary.total || 0),
+      totalPages: Math.max(Number(detailSummary.totalPages) || 1, 1),
+      isLoading: false,
+      error: ''
+    };
+    showSummary();
+  } catch (error) {
+    if (requestId !== summaryState.detailRequestId || currentMainPage !== 'summary') return;
+
+    summaryState.detailLoading = false;
+    summaryState.detailError = error.message;
+    summaryState.detail = {
+      ...summaryState.detail,
+      isLoading: false,
+      error: error.message
+    };
+
+    if (handleApiAccessError(error, (message) => {
+      showSummary({ error: message, isLoading: false });
+    })) {
+      return;
+    }
+
+    showSummary();
+  }
+}
+
+function handleOpenSummaryLot(lotNumber) {
+  if (!lotNumber) return;
+  rememberLastPage('summary');
+  lotInspectionReadOnly = true;
+  return loadLotInspection(lotNumber, 'dimension');
 }
 
 async function loadExportReport() {
@@ -2626,6 +2923,12 @@ function handleBackToResults() {
   clearLotInspectionLocation();
   resetLotInspectionState();
   loadResults();
+}
+
+function handleBackToSummary() {
+  clearLotInspectionLocation();
+  resetLotInspectionState();
+  loadSummary();
 }
 
 function handleBackToInspectionQueue() {

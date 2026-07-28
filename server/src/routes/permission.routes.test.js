@@ -11,6 +11,7 @@ const [
   { inspectionQueueRouter },
   { lotRouter },
   { settingsRouter },
+  { summaryRouter },
   { userRouter }
 ] = await Promise.all([
   import('./auth.routes.js'),
@@ -19,6 +20,7 @@ const [
   import('./inspection-queue.routes.js'),
   import('./lot.routes.js'),
   import('./settings.routes.js'),
+  import('./summary.routes.js'),
   import('./user.routes.js')
 ]);
 
@@ -87,6 +89,7 @@ test('protects critical backend routes with the approved role matrix', () => {
   assertAllowedRoles(getGlobalRoleGuard(settingsRouter), ['head', 'assistant']);
   assertAllowedRoles(getGlobalRoleGuard(excelRouter), ['head', 'assistant']);
   assertAllowedRoles(getGlobalRoleGuard(inspectionQueueRouter), knownRoles);
+  assertAllowedRoles(getGlobalRoleGuard(summaryRouter), managerRoles);
 
   assertAllowedRoles(
     getRouteRoleGuard(databaseRouter, '/health', 'get', 1),
@@ -122,6 +125,7 @@ test('keeps frontend page permissions aligned with the approved role matrix', as
   assert.deepEqual(configModule.pagePermissions.settings, ['head', 'assistant']);
   assert.deepEqual(configModule.pagePermissions.importExcel, ['head', 'assistant']);
   assert.deepEqual(configModule.pagePermissions.approval, ['head', 'assistant']);
+  assert.deepEqual(configModule.pagePermissions.summary, managerRoles);
   assert.deepEqual(configModule.pagePermissions.dimension, knownRoles);
   assert.deepEqual(configModule.pagePermissions.packing, knownRoles);
   assert.deepEqual(configModule.pagePermissions.results, knownRoles);
@@ -146,11 +150,11 @@ test('keeps frontend page permissions aligned with the approved role matrix', as
 
   assert.deepEqual(visibleMenuIds('head'), [
     'dashboard', 'barcode', 'importExcel', 'manualLot', 'dimension', 'packing', 'approval',
-    'history', 'export', 'exportDimension', 'results', 'users', 'settings'
+    'history', 'export', 'exportDimension', 'results', 'summary', 'users', 'settings'
   ]);
   assert.deepEqual(visibleMenuIds('assistant'), [
     'dashboard', 'barcode', 'importExcel', 'manualLot', 'dimension', 'packing', 'approval',
-    'history', 'export', 'exportDimension', 'results', 'settings'
+    'history', 'export', 'exportDimension', 'results', 'summary', 'settings'
   ]);
   assert.deepEqual(visibleMenuIds('officer'), [
     'dashboard', 'barcode', 'dimension', 'packing', 'history', 'results'
