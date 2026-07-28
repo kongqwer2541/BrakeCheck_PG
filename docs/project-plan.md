@@ -4,9 +4,9 @@
 
 ใช้ไฟล์นี้เป็นแหล่งหลักสำหรับ roadmap, สถานะ Step, และ handoff summary ของงานที่ทำเสร็จแล้ว ส่วนวิธีแตก branch, commit, push และ prompt สำหรับเริ่มงานใหม่ให้ดู `docs/git-branch-workflow.md`
 
-สถานะปัจจุบัน ณ 2026-07-01: โปรแกรมพัฒนาครบตามแผนหลักและจบที่ Step 15: Results แล้ว เอกสารนี้จึงใช้เป็นบันทึกสรุปงานและเงื่อนไขสำคัญที่ต้องรักษาต่อ
+สถานะปัจจุบัน ณ 2026-07-28: โปรแกรมเปลี่ยนมาใช้ PostgreSQL 17 และผ่าน workflow/UAT บนเครื่องทดสอบแล้ว กำลังเตรียมติดตั้งฐานข้อมูลใหม่ที่สะอาดบนเครื่องบริษัท เอกสารนี้เก็บทั้งแผนเดิมและกฎสำคัญที่ต้องรักษาต่อ
 
-BrakeCheck คือ Web Application สำหรับ QC โรงงานผลิตผ้าเบรก เปิดใช้งานผ่าน Chrome และเก็บข้อมูลใน MySQL บนเครื่องหรือเครือข่ายภายในโรงงาน
+BrakeCheck คือ Web Application สำหรับ QC โรงงานผลิตผ้าเบรก เปิดใช้งานผ่าน Chrome และเก็บข้อมูลใน PostgreSQL 17 บนเครื่องหรือเครือข่ายภายในโรงงาน
 
 ## เป้าหมายหลัก
 
@@ -22,7 +22,7 @@ BrakeCheck คือ Web Application สำหรับ QC โรงงานผ
 
 - Frontend: HTML, CSS, JavaScript
 - Backend: Node.js, Express
-- Database: MySQL
+- Database: PostgreSQL 17
 - Tools: VS Code, Git, GitHub, Chrome
 
 ## Business Rules สำคัญ
@@ -43,7 +43,7 @@ BrakeCheck คือ Web Application สำหรับ QC โรงงานผ
 
 - สร้างโครงสร้างโปรเจกต์
 - ตั้งค่า Backend Server
-- เชื่อมต่อ MySQL
+- เชื่อมต่อฐานข้อมูล (แผนเดิมเริ่มจาก MySQL; ระบบปัจจุบันใช้ PostgreSQL 17)
 - เพิ่ม API ตรวจ Server และ Database
 
 ### Step 4: Login และผู้ใช้
@@ -71,7 +71,7 @@ BrakeCheck คือ Web Application สำหรับ QC โรงงานผ
 - ตรวจชนิดไฟล์และ Sheet `DATA`
 - ตรวจ Lot ซ้ำ
 - ตรวจคอลัมน์สำคัญ
-- Confirm Save ลง MySQL
+- Confirm Save ลง PostgreSQL
 - Dashboard ใช้ข้อมูลจริง
 - Manual Input Lot
 - Edit / Void Lot
@@ -479,7 +479,7 @@ Tech stack:
 
 - Frontend: HTML, CSS, JavaScript
 - Backend: Node.js, Express
-- Database: MySQL
+- Database: PostgreSQL 17
 - Export Excel เดิมใช้ `exceljs`
 - ทำงาน local-first ไม่เพิ่มบริการเสียเงินหรือ cloud database ถ้าไม่ได้อนุมัติ
 

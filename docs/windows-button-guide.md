@@ -21,12 +21,17 @@ scripts/
 ไฟล์ที่มี:
 
 - `scripts/start-server.bat`
+- `scripts/stop-server.bat`
 - `scripts/check-system.bat`
+- `scripts/setup-local-env.bat`
 - `scripts/backup-database.bat`
 - `scripts/backup-system.bat`
+- `scripts/auto-backup-database.bat`
+- `scripts/auto-backup-system.bat`
 - `scripts/auto-start-server.bat`
 - `scripts/install-auto-start.bat`
 - `scripts/uninstall-auto-start.bat`
+- `scripts/register-auto-backup-task.ps1`
 
 ## แต่ละปุ่มใช้ทำอะไร
 
@@ -62,9 +67,17 @@ http://localhost:3000/api/database/health
 - มี `server/package.json` หรือไม่
 - มี `.env` หรือไม่
 
+### setup-local-env.bat
+
+ใช้สร้าง `.env` ครั้งแรกสำหรับ PostgreSQL local โดยถามรหัสผ่านแบบซ่อนและสร้าง `SESSION_SECRET` ให้
+
+- ไม่อ่านหรือเขียนทับ `.env` ที่มีอยู่
+- ทดสอบแบบไม่สร้างไฟล์ได้ด้วย `scripts\setup-local-env.bat --dry-run`
+- ใช้เฉพาะเมื่อค่า Host, Port, Database และ User ตรงกับค่า local มาตรฐาน
+
 ### backup-database.bat
 
-ใช้สำรองข้อมูล MySQL ด้วย `mysqldump`
+ใช้สำรองข้อมูล PostgreSQL ด้วย `pg_dump`
 
 ปุ่มนี้ backup เฉพาะฐานข้อมูล ไม่รวมไฟล์แนบจริงใน `storage/attachments` ถ้าต้องการกู้ระบบให้ครบให้ใช้ `backup-system.bat` แทน
 
@@ -77,7 +90,7 @@ backups/
 ไฟล์ backup จะมีวันที่และเวลาในชื่อไฟล์ เช่น:
 
 ```text
-brakecheck_backup_20260611-153000.sql
+brakecheck_pg_backup_20260611-153000.backup
 ```
 
 ### backup-system.bat
@@ -86,8 +99,9 @@ brakecheck_backup_20260611-153000.sql
 
 ปุ่มนี้จะ Backup:
 
-- MySQL database เป็นไฟล์ `.sql`
+- PostgreSQL database เป็นไฟล์ `database.backup`
 - `storage/attachments` เป็นไฟล์ `.zip`
+- ข้อมูลชุด backup เป็นไฟล์ `backup-info.txt`
 
 ไฟล์ backup จะถูกสร้างใน:
 
@@ -95,9 +109,22 @@ brakecheck_backup_20260611-153000.sql
 backups/
 ```
 
-ถ้าระบบถามรหัสผ่าน MySQL ให้กรอกรหัสผ่าน database ของเครื่องแม่
+สคริปต์อ่านรหัสผ่าน PostgreSQL จาก `.env` และต้องไม่พิมพ์หรือบันทึกรหัสผ่านลง log
 
 ถ้าต้อง Restore จากไฟล์ backup ที่ได้ ให้ไปที่ `docs/backup-restore-guide.md` ก่อนทำจริง
+
+### auto-backup-database.bat และ auto-backup-system.bat
+
+ใช้โดย Windows Task Scheduler เพื่อ backup อัตโนมัติ
+
+- `auto-backup-database.bat` สำรองเฉพาะ PostgreSQL
+- `auto-backup-system.bat` สำรอง PostgreSQL และ attachments
+- ไม่ Restore ไม่รัน migration และไม่ลบ backup เก่า
+- วิธีติดตั้ง task อยู่ใน `docs/auto-backup-guide.md`
+
+### stop-server.bat
+
+ใช้หยุด server ที่เปิดผ่าน helper โดยตรวจ PID ก่อนและถามยืนยัน เพื่อไม่ปิด Node.js ของโปรแกรมอื่น
 
 ### install-auto-start.bat
 
@@ -119,7 +146,7 @@ scripts/auto-start-server.bat
 
 - ควรใช้บนเครื่องแม่บริษัทเท่านั้น
 - ถ้าขึ้น `Access is denied` ให้เปิด PowerShell แบบ Run as Administrator แล้วติดตั้งตามหัวข้อด้านล่าง
-- MySQL ต้องเปิดอัตโนมัติหลัง reboot ด้วย
+- PostgreSQL ต้องเปิดอัตโนมัติหลัง reboot ด้วย
 - ถ้า server เปิดไม่ติด ให้ดู log ที่ `server/auto-start-server.log`
 - ถ้ากดแล้วหน้าต่างไม่ขึ้น ให้เปิด Command Prompt ในโฟลเดอร์โปรเจกต์แล้วรัน `scripts\install-auto-start.bat --dry-run` เพื่อดูข้อความ
 - การติดตั้ง/ถอด Auto Start จะมี log สั้น ๆ ที่ `server/auto-start-install.log`
@@ -134,7 +161,7 @@ scripts/auto-start-server.bat
 5. รันคำสั่ง:
 
 ```powershell
-cd C:\Users\KONG\Documents\BrakeCheck
+cd C:\BrakeCheck_PG
 .\scripts\install-auto-start.bat --opened-by-wrapper
 ```
 
@@ -175,7 +202,7 @@ scripts/uninstall-auto-start.bat --dry-run
 5. รันคำสั่ง:
 
 ```powershell
-cd C:\Users\KONG\Documents\BrakeCheck
+cd C:\BrakeCheck_PG
 .\scripts\uninstall-auto-start.bat --opened-by-wrapper
 ```
 
@@ -211,35 +238,35 @@ ERROR: The system cannot find the file specified.
 
 ถ้าเป็นเครื่องแม่บริษัทและต้องการให้ server เปิดเองหลัง login ให้เปิด `install-auto-start.bat` หลังจากทดสอบ `start-server.bat` ผ่านแล้ว
 
-## ตั้งค่า MySQL ให้เปิดอัตโนมัติหลังเปิดเครื่อง
+## ตั้งค่า PostgreSQL ให้เปิดอัตโนมัติหลังเปิดเครื่อง
 
-Auto Start ของ BrakeCheck จะเปิด server ให้ แต่ถ้า MySQL ยังไม่เปิด server อาจใช้งานไม่ได้ จึงควรตั้ง MySQL ให้เปิดเองหลัง Windows เปิดเครื่องด้วย
+Auto Start ของ BrakeCheck จะเปิด server ให้ แต่ถ้า PostgreSQL ยังไม่เปิด server อาจใช้งานไม่ได้ จึงควรตั้ง PostgreSQL ให้เปิดเองหลัง Windows เปิดเครื่องด้วย
 
-### วิธีตรวจชื่อ MySQL service
+### วิธีตรวจชื่อ PostgreSQL service
 
 1. เปิด PowerShell แบบ Run as Administrator
 2. รันคำสั่ง:
 
 ```powershell
-Get-Service | Where-Object { $_.Name -like "MySQL*" } | Select-Object Name, Status, StartType
+Get-Service | Where-Object { $_.Name -like "postgresql*" } | Select-Object Name, Status, StartType
 ```
 
 ชื่อที่พบบ่อย เช่น:
 
 ```text
-MySQL80
+postgresql-x64-17
 ```
 
-ถ้าไม่เจอชื่อ MySQL service ให้ถาม IT หรือคนที่ติดตั้ง MySQL ก่อน
+ชื่อ service อาจต่างกันตามวิธีติดตั้ง ถ้าไม่เจอ PostgreSQL service ให้ถาม IT หรือคนที่ติดตั้งก่อน
 
-### วิธีตั้ง MySQL ให้เปิดอัตโนมัติ
+### วิธีตั้ง PostgreSQL ให้เปิดอัตโนมัติ
 
-ตัวอย่างนี้ใช้ชื่อ service เป็น `MySQL80` ถ้าเครื่องจริงใช้ชื่ออื่น ให้เปลี่ยนชื่อให้ตรงกับที่ตรวจพบ
+ตัวอย่างนี้ใช้ชื่อ service เป็น `postgresql-x64-17` ถ้าเครื่องจริงใช้ชื่ออื่น ให้เปลี่ยนชื่อให้ตรงกับที่ตรวจพบ
 
 ```powershell
-Set-Service -Name "MySQL80" -StartupType Automatic
-Start-Service -Name "MySQL80"
-Get-Service -Name "MySQL80"
+Set-Service -Name "postgresql-x64-17" -StartupType Automatic
+Start-Service -Name "postgresql-x64-17"
+Get-Service -Name "postgresql-x64-17"
 ```
 
 ผลที่ควรเห็น:
@@ -256,7 +283,7 @@ StartType = Automatic
 3. เปิด PowerShell แล้วรัน:
 
 ```powershell
-Get-Service -Name "MySQL80"
+Get-Service -Name "postgresql-x64-17"
 ```
 
 4. เปิด Chrome แล้วเข้า:
@@ -266,7 +293,7 @@ http://localhost:3000/
 http://localhost:3000/api/health
 ```
 
-ถ้าเว็บเปิดได้และ `/api/health` ผ่าน แปลว่า Auto Start และ MySQL พร้อมใช้งานเบื้องต้น
+ถ้าเว็บเปิดได้และ `/api/database/health` ผ่าน แปลว่า Auto Start และ PostgreSQL พร้อมใช้งานเบื้องต้น
 
 ถ้าเว็บเปิดไม่ได้ ให้ดู:
 
@@ -284,7 +311,7 @@ server\auto-start-install.log
 - เปิด `check-system.bat`
 - ตรวจว่ามี Node.js และ npm
 - ตรวจว่ามี `.env`
-- ตรวจว่า MySQL เปิดอยู่
+- ตรวจว่า PostgreSQL เปิดอยู่
 - ตรวจว่า port `3000` ไม่ถูกโปรแกรมอื่นใช้
 - อ่าน error ในหน้าต่างก่อนกดปุ่มปิด
 
@@ -311,5 +338,5 @@ server\auto-start-install.log
 - ห้าม commit backup ขึ้น GitHub
 - ห้ามส่งไฟล์ backup ให้คนที่ไม่เกี่ยวข้อง
 - ก่อน restore ต้องเข้าใจว่า restore อาจเขียนทับข้อมูลปัจจุบัน
-- ถ้าต้องการกู้ระบบให้ครบ ต้องมีทั้งไฟล์ `.sql` และไฟล์ `.zip` ของ attachments
+- ถ้าต้องการกู้ระบบให้ครบ ต้องมีทั้ง `database.backup`, `attachments.zip` และ `backup-info.txt`
 - รายละเอียด Restore ที่ปลอดภัยอยู่ใน `docs/backup-restore-guide.md`

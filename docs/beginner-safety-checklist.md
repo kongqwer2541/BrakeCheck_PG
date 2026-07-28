@@ -43,7 +43,7 @@
 - Paid service
 - frontend/backend framework ใหม่
 
-ใช้ HTML, CSS, JavaScript, Node.js, Express, MySQL ตามโปรเจกต์เดิมก่อน
+ใช้ HTML, CSS, JavaScript, Node.js, Express และ PostgreSQL 17 ตามระบบปัจจุบัน
 
 ## ก่อนอัปเดตระบบ
 
@@ -67,7 +67,7 @@
 ## ระหว่างใช้งานจริง
 
 - อย่าปิดเครื่องแม่ถ้ามีคนใช้งานระบบอยู่
-- อย่าปิด MySQL ถ้ามีคนกำลังบันทึกงาน
+- อย่าปิด PostgreSQL ถ้ามีคนกำลังบันทึกงาน
 - อย่าปิด server ถ้ายังไม่ได้แจ้งผู้ใช้
 - ถ้าจะอัปเดตระบบ ให้เลือกเวลาที่ไม่มีคนใช้งาน
 

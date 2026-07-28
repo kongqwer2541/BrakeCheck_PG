@@ -4,7 +4,7 @@
 
 เป้าหมายคือให้ IT ตรวจว่าเครื่องแม่, database, backup, restore และ workflow QC พร้อมใช้งานจริงแล้ว
 
-> ห้ามใส่รหัสผ่านจริง, ค่า `.env` จริง, ไฟล์ backup, `.sql`, `.zip` หรือข้อมูลโรงงานจริงในเอกสารนี้
+> ห้ามใส่รหัสผ่านจริง, ค่า `.env` จริง, ไฟล์ `.backup`, `.zip` หรือข้อมูลโรงงานจริงในเอกสารนี้
 
 ## ข้อมูลการตรวจ
 
@@ -17,10 +17,10 @@
 
 ## 1. เครื่องแม่และโปรแกรมพื้นฐาน
 
-- [ ] เครื่องแม่ถูกกำหนดชัดเจนว่าเป็นเครื่องเปิด server และเก็บ MySQL
+- [ ] เครื่องแม่ถูกกำหนดชัดเจนว่าเป็นเครื่องเปิด server และเก็บ PostgreSQL 17
 - [ ] เครื่องแม่เปิด Windows ได้ปกติ
 - [ ] ติดตั้ง Node.js แล้ว
-- [ ] ติดตั้ง MySQL แล้ว
+- [ ] ติดตั้ง PostgreSQL 17 แล้ว
 - [ ] ติดตั้ง Chrome แล้ว
 - [ ] ติดตั้ง Git แล้ว ถ้าบริษัทใช้ Git เพื่ออัปเดตระบบ
 - [ ] ตรวจระบบด้วย `scripts/check-system.bat` แล้วผ่าน
@@ -33,7 +33,7 @@
 - [ ] เครื่องลูกเปิด `http://<server-ip>:3000/` ได้
 - [ ] แท็บเล็ตหรือเครื่อง QC ที่ใช้งานจริงเปิดเว็บได้
 - [ ] Windows Firewall หรือ firewall บริษัทอนุญาต port `3000` ตามที่ IT อนุมัติ
-- [ ] เครื่องลูกไม่ต้องต่อ MySQL โดยตรง ใช้งานผ่านเว็บ BrakeCheck เท่านั้น
+- [ ] เครื่องลูกไม่ต้องต่อ PostgreSQL โดยตรง ใช้งานผ่านเว็บ BrakeCheck เท่านั้น
 
 ## 3. `.env` และความปลอดภัย
 
@@ -42,8 +42,8 @@
 - [ ] `APP_PORT` ถูกต้อง
 - [ ] `CORS_ORIGINS` ระบุเฉพาะ URL ที่อนุญาต ไม่ใช้ `*`
 - [ ] `SESSION_SECRET` เป็นค่าจริง ยาวอย่างน้อย 32 ตัวอักษร และไม่ใช่ placeholder
-- [ ] production ใช้ MySQL user เฉพาะระบบ เช่น `brakecheck_app`
-- [ ] production ไม่ใช้ `DB_USER=root`
+- [ ] production ใช้ PostgreSQL role เฉพาะระบบ `brakecheck_app`
+- [ ] production ไม่ใช้ `DB_USER=postgres`
 - [ ] ไม่มีรหัสผ่านจริงถูกเขียนในเอกสาร, chat, commit หรือ screenshot ที่จะแชร์ออกไป
 
 ## 4. Database Health
@@ -52,17 +52,17 @@
 - [ ] เปิด `http://localhost:3000/api/health` แล้วระบบตอบว่าใช้งานได้
 - [ ] เปิด `http://localhost:3000/api/database/health` หลัง login แล้วผ่าน
 - [ ] Database health ตรวจพบตาราง QC สำคัญครบ
-- [ ] ไม่มี error เรื่องต่อ MySQL ไม่ได้
+- [ ] ไม่มี error เรื่องต่อ PostgreSQL ไม่ได้
 - [ ] ไม่มี stack trace หรือ SQL error หลุดให้ผู้ใช้ทั่วไปเห็น
 
 ## 5. Backup ก่อนเปิดจริง
 
 - [ ] รัน `scripts/backup-system.bat` แล้วสำเร็จ
-- [ ] ได้ไฟล์ backup database `.sql`
+- [ ] ได้ไฟล์ backup database `.backup`
 - [ ] ได้ไฟล์ backup attachments `.zip` ถ้ามีไฟล์แนบ
 - [ ] ไฟล์ backup อยู่ใน `backups/` หรือที่บริษัทกำหนด
 - [ ] copy backup สำคัญออกไปเก็บนอก repo หรือที่เก็บกลางของบริษัทแล้ว
-- [ ] ยืนยันว่า `backups/`, `.sql`, `.zip` ไม่ถูก commit ขึ้น GitHub
+- [ ] ยืนยันว่า `backups/`, `.backup`, `.zip` ไม่ถูก commit ขึ้น GitHub
 
 ## 6. Restore Drill
 
@@ -95,7 +95,7 @@
 - [ ] ยังไม่ได้ backup ทั้งระบบ
 - [ ] ยังไม่ได้ซ้อม restore กับ test database
 - [ ] `/api/database/health` ไม่ผ่าน
-- [ ] production ยังใช้ `DB_USER=root`
+- [ ] production ยังใช้ `DB_USER=postgres`
 - [ ] เครื่องลูกเปิดเว็บไม่ได้
 - [ ] Login, Import, Confirm Save, Approve หรือ Report ใช้งานไม่ได้
 - [ ] ยังไม่รู้ว่าใครดูแลเครื่องแม่, backup และ restore
@@ -105,7 +105,7 @@
 ## 9. ผู้รับผิดชอบหลังเปิดจริง
 
 - ผู้ดูแลเครื่องแม่: __________
-- ผู้ดูแล MySQL และ `.env`: __________
+- ผู้ดูแล PostgreSQL และ `.env`: __________
 - ผู้ดูแล backup: __________
 - ผู้อนุมัติ restore: __________
 - ช่องทางแจ้งปัญหา: __________
