@@ -15,6 +15,41 @@ const lot = {
   statusLabel: 'รอตรวจบรรจุ'
 };
 
+const dimensionFormConfig = [
+  {
+    id: 1,
+    topicName: 'Width',
+    inputCount: 1,
+    decimalPlaces: 2,
+    inputType: 'number',
+    measurePieces: 'all'
+  },
+  {
+    id: 2,
+    topicName: 'Length',
+    inputCount: 1,
+    decimalPlaces: 1,
+    inputType: 'number',
+    measurePieces: 'all'
+  },
+  {
+    id: 3,
+    topicName: 'Thickness',
+    inputCount: 2,
+    decimalPlaces: 2,
+    inputType: 'number',
+    measurePieces: 'all'
+  },
+  {
+    id: 4,
+    topicName: 'Final result',
+    inputCount: 1,
+    decimalPlaces: 0,
+    inputType: 'pass_fail',
+    measurePieces: 'all'
+  }
+];
+
 test('dimension NG result requires an inspection note', () => {
   assert.equal(typeof lotInspectionPage.requiresDimensionInspectionNote, 'function');
   assert.equal(lotInspectionPage.requiresDimensionInspectionNote({
@@ -25,6 +60,317 @@ test('dimension NG result requires an inspection note', () => {
     meta: { inspectionNote: 'Dimension is outside tolerance' },
     topics: [{ rows: [{ values: ['fail'] }] }]
   }), false);
+  assert.equal(lotInspectionPage.requiresDimensionInspectionNote({
+    meta: {
+      inspectionNote: '',
+      ngStop: { topicId: 2, topicName: 'Length' }
+    },
+    topics: [{ rows: [{ values: ['65.6'] }] }]
+  }), true);
+});
+
+test('dimension NG details stay hidden until the final result is NG', () => {
+  const html = renderLotInspectionPage({
+    lot: {
+      ...lot,
+      status: 'pending',
+      statusLabel: 'รอตรวจ'
+    },
+    formConfig: dimensionFormConfig,
+    formValues: {
+      sampleCount: 1,
+      piecesData: {
+        meta: { inspectionNote: '' },
+        topics: []
+      }
+    },
+    userRole: 'officer'
+  });
+
+  assert.doesNotMatch(html, /data-dimension-ng-stop-trigger/);
+  assert.match(html, /<div[^>]*data-dimension-ng-topic-panel[^>]*hidden/);
+  assert.match(html, /data-dimension-ng-topic[^>]*disabled/);
+});
+
+test('dimension NG details stay hidden when a stale NG topic remains after final result passes', () => {
+  const html = renderLotInspectionPage({
+    lot: {
+      ...lot,
+      status: 'pending',
+      statusLabel: 'รอตรวจ'
+    },
+    formConfig: dimensionFormConfig,
+    formValues: {
+      sampleCount: 1,
+      piecesData: {
+        meta: {
+          inspectionNote: '',
+          ngStop: { topicId: 2, topicName: 'Length' }
+        },
+        topics: [
+          {
+            topicId: 4,
+            topicName: 'Final result',
+            rows: [{ pieceNo: 1, values: ['pass'] }]
+          }
+        ]
+      }
+    },
+    userRole: 'officer'
+  });
+
+  assert.match(html, /<div[^>]*data-dimension-ng-topic-panel[^>]*hidden/);
+  assert.match(html, /data-dimension-ng-topic[^>]*disabled/);
+  assert.doesNotMatch(html, /value="2"[\s\S]*?selected/);
+});
+
+test('dimension final result stays identified when another pass-fail topic is ordered after it', () => {
+  const reorderedConfig = [
+    ...dimensionFormConfig,
+    {
+      id: 5,
+      topicName: 'Surface condition',
+      inputCount: 1,
+      decimalPlaces: 0,
+      inputType: 'pass_fail',
+      measurePieces: 'all'
+    }
+  ];
+  const html = renderLotInspectionPage({
+    lot: {
+      ...lot,
+      status: 'pending',
+      statusLabel: 'รอตรวจ'
+    },
+    formConfig: reorderedConfig,
+    formValues: {
+      sampleCount: 1,
+      piecesData: {
+        meta: {
+          inspectionNote: 'Width is outside tolerance',
+          ngStop: { topicId: 1, topicName: 'Width' }
+        },
+        topics: [
+          {
+            topicId: 1,
+            topicName: 'Width',
+            rows: [{ pieceNo: 1, values: ['10.00'] }]
+          },
+          {
+            topicId: 4,
+            topicName: 'Final result',
+            rows: [{ pieceNo: 1, values: ['fail'] }]
+          },
+          {
+            topicId: 5,
+            topicName: 'Surface condition',
+            rows: [{ pieceNo: 1, values: ['pass'] }]
+          }
+        ]
+      }
+    },
+    userRole: 'officer'
+  });
+
+  assert.doesNotMatch(html, /<div[^>]*data-dimension-ng-topic-panel[^>]*hidden/);
+  assert.match(
+    html,
+    /data-topic-name="Final result"[\s\S]*?data-final-result-topic="true"/
+  );
+  assert.doesNotMatch(
+    html,
+    /data-topic-name="Surface condition"[\s\S]*?data-final-result-topic="true"/
+  );
+});
+
+test('dimension NG details show the selected cause and keep later blank topics editable', () => {
+  const html = renderLotInspectionPage({
+    lot: {
+      ...lot,
+      status: 'pending',
+      statusLabel: 'รอตรวจ'
+    },
+    formConfig: dimensionFormConfig,
+    formValues: {
+      sampleCount: 1,
+      piecesData: {
+        meta: {
+          inspectionNote: 'Length is outside tolerance',
+          ngStop: {
+            topicId: 2,
+            topicName: 'Length'
+          }
+        },
+        topics: [
+          {
+            topicId: 1,
+            topicName: 'Width',
+            rows: [{ pieceNo: 1, values: ['10.00'] }]
+          },
+          {
+            topicId: 2,
+            topicName: 'Length',
+            rows: [{ pieceNo: 1, values: ['65.6'] }]
+          },
+          {
+            topicId: 3,
+            topicName: 'Thickness',
+            rows: [{ pieceNo: 1, values: ['', ''] }]
+          },
+          {
+            topicId: 4,
+            topicName: 'Final result',
+            rows: [{ pieceNo: 1, values: ['fail'] }]
+          }
+        ]
+      }
+    },
+    userRole: 'officer'
+  });
+
+  assert.doesNotMatch(html, /<div[^>]*data-dimension-ng-topic-panel[^>]*hidden/);
+  assert.match(html, /name="ngStopTopicId"[\s\S]*value="2"[\s\S]*?selected/);
+  assert.match(html, /value="65.6"/);
+  assert.doesNotMatch(html, /data-not-inspected="true"/);
+
+  const topicSelectHtml = html.match(
+    /<select[^>]*data-dimension-ng-topic[\s\S]*?<\/select>/
+  )?.[0] || '';
+
+  assert.doesNotMatch(topicSelectHtml, /value="4"/);
+});
+
+test('saved not-inspected values display as N/A without changing the NG topic values', () => {
+  const html = renderLotInspectionPage({
+    lot: {
+      ...lot,
+      status: 'pending',
+      statusLabel: 'รอตรวจ'
+    },
+    formConfig: dimensionFormConfig,
+    formValues: {
+      sampleCount: 1,
+      piecesData: {
+        meta: {
+          inspectionNote: 'Length is outside tolerance',
+          ngStop: { topicId: 2, topicName: 'Length' }
+        },
+        topics: [
+          {
+            topicId: 1,
+            topicName: 'Width',
+            rows: [{ pieceNo: 1, values: ['10.00'] }]
+          },
+          {
+            topicId: 2,
+            topicName: 'Length',
+            rows: [{ pieceNo: 1, values: ['65.6'] }]
+          },
+          {
+            topicId: 3,
+            topicName: 'Thickness',
+            rows: [{ pieceNo: 1, values: ['-', '-'] }]
+          },
+          {
+            topicId: 4,
+            topicName: 'Final result',
+            rows: [{ pieceNo: 1, values: ['fail'] }]
+          }
+        ]
+      }
+    },
+    userRole: 'officer'
+  });
+
+  assert.match(html, /value="65.6"/);
+  assert.match(html, /ไม่ได้ตรวจ \(N\/A\)/);
+  assert.match(html, /data-not-inspected="true"/);
+});
+
+test('saved N/A values become editable blanks when completed NG work is sent back', () => {
+  const html = renderLotInspectionPage({
+    lot: {
+      ...lot,
+      status: 'need_fix',
+      statusLabel: 'รอแก้ไข'
+    },
+    inspection: {
+      status: 'completed'
+    },
+    formConfig: dimensionFormConfig,
+    formValues: {
+      sampleCount: 1,
+      piecesData: {
+        meta: {
+          inspectionNote: 'Length is outside tolerance',
+          ngStop: { topicId: 2, topicName: 'Length' }
+        },
+        topics: [
+          {
+            topicId: 1,
+            topicName: 'Width',
+            rows: [{ pieceNo: 1, values: ['10.00'] }]
+          },
+          {
+            topicId: 2,
+            topicName: 'Length',
+            rows: [{ pieceNo: 1, values: ['65.6'] }]
+          },
+          {
+            topicId: 3,
+            topicName: 'Thickness',
+            rows: [{ pieceNo: 1, values: ['-', '-'] }]
+          },
+          {
+            topicId: 4,
+            topicName: 'Final result',
+            rows: [{ pieceNo: 1, values: ['fail'] }]
+          }
+        ]
+      }
+    },
+    userRole: 'officer'
+  });
+
+  assert.match(html, /data-read-only="false"/);
+  assert.doesNotMatch(html, /data-not-inspected="true"/);
+  assert.match(
+    html,
+    /data-topic-name="Thickness"[\s\S]*?type="text"[\s\S]*?value=""/
+  );
+});
+
+test('dimension NG completion requires the NG topic and any started later topic to be complete', () => {
+  assert.equal(typeof lotInspectionPage.getRequiredMissingMeasurementInputs, 'function');
+
+  const makeInput = (topicKey, value, inputType = 'number') => ({
+    value,
+    dataset: { topicKey, inputType }
+  });
+  const before = makeInput('1', '10.00');
+  const ngMeasured = makeInput('2', '65.6');
+  const ngMissing = makeInput('2', '');
+  const laterMeasured = makeInput('3', '11.11');
+  const laterMissing = makeInput('3', '');
+  const untouchedLaterA = makeInput('5', '');
+  const untouchedLaterB = makeInput('5', '');
+  const finalResult = makeInput('4', 'fail', 'pass_fail');
+
+  const missing = lotInspectionPage.getRequiredMissingMeasurementInputs([
+    before,
+    ngMeasured,
+    ngMissing,
+    laterMeasured,
+    laterMissing,
+    untouchedLaterA,
+    untouchedLaterB,
+    finalResult
+  ], {
+    ngStopTopicId: '2',
+    finalResultTopicKey: '4'
+  });
+
+  assert.deepEqual(missing, [ngMissing, laterMissing]);
 });
 
 test('packing error keeps a clear action back to the dimension form', () => {

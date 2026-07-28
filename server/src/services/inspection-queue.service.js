@@ -224,10 +224,18 @@ function getQueueStatus(row, queueType) {
   const latestNgSource = getLatestNgSource(row);
 
   if (row.status === 'need_fix') {
+    if (queueType === 'packing' && !isPackingRelevant(row, latestNgSource)) {
+      return '';
+    }
+
     return 'need_fix';
   }
 
   if (row.status === 'ng') {
+    if (queueType === 'packing' && latestNgSource === 'dimension') {
+      return '';
+    }
+
     return !latestNgSource || latestNgSource === queueType ? 'ng' : 'done';
   }
 

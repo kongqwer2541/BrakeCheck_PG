@@ -129,11 +129,21 @@ function addPdfDimensionSection(doc, lot, deps) {
 
 function addPdfPackingSection(doc, lot, deps) {
   const inspection = lot.packingInspection;
+
+  addPdfSectionTitle(doc, 'ฟอร์มตรวจบรรจุ');
+
+  if (lot.status === 'ng' && !inspection.status) {
+    addPdfKeyValueGrid(doc, [
+      ['สถานะ', 'ไม่ได้ตรวจบรรจุ'],
+      ['เหตุผล', 'NG ตั้งแต่ตรวจมิติ']
+    ], { pairsPerRow: 1 });
+    return;
+  }
+
   const resultsData = inspection.resultsData || { meta: {}, topics: [] };
   const packingSummary = deps.getPackingSummary(resultsData);
   const availableWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
 
-  addPdfSectionTitle(doc, 'ฟอร์มตรวจบรรจุ');
   addPdfKeyValueGrid(doc, [
     ['สถานะ', inspection.status || '-'],
     ['สรุปผล', packingSummary.label],

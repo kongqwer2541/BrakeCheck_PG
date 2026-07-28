@@ -743,6 +743,10 @@ h2 {
   grid-template-columns: minmax(150px, 190px) auto minmax(150px, 190px) minmax(240px, 1fr);
 }
 
+.results-filter-layout {
+  grid-template-columns: minmax(150px, 190px) auto minmax(320px, 1fr);
+}
+
 .queue-date-actions {
   display: flex;
   align-items: end;
@@ -2926,6 +2930,63 @@ h2 {
   background: #fff7f5;
 }
 
+.dimension-ng-topic-panel {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.25fr) minmax(240px, 420px) minmax(240px, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #f1c6a7;
+  border-left: 4px solid var(--brand-orange);
+  border-radius: 8px;
+  background: #fffaf5;
+}
+
+.dimension-ng-topic-panel[hidden] {
+  display: none;
+}
+
+.dimension-ng-topic-copy {
+  display: grid;
+  gap: 3px;
+  color: #7f3518;
+}
+
+.dimension-ng-topic-copy strong {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.dimension-ng-topic-copy span {
+  color: #6b513f;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.dimension-ng-topic-field {
+  margin: 0;
+}
+
+.dimension-ng-topic-status {
+  color: #6b513f;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.dimension-ng-skipped-value {
+  display: grid;
+  place-items: center;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 1px dashed #c6d3dd;
+  border-radius: 6px;
+  background: #f4f7f9;
+  color: #5c6d79;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .dimension-skip-cell {
   background: #f7fafc;
   color: #7b8d9b;
@@ -3322,6 +3383,11 @@ h2 {
   .dimension-topic-item,
   .dimension-section-title {
     grid-template-columns: 1fr;
+  }
+
+  .dimension-ng-topic-panel {
+    grid-template-columns: 1fr;
+    align-items: stretch;
   }
 
   .settings-section {

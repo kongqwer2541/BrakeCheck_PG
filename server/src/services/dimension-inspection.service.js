@@ -19,6 +19,10 @@ const brakeModels = ['drilled_bored', 'no_hole'];
 const rivetHoleThicknessOptions = [2, 2.5, 3, 3.5];
 const defaultInstrumentCodePrefixes = ['A-01-', 'A-01-', 'A-07-', 'A-01-', 'A-01-'];
 const maxJsonTextLength = 200000;
+const dimensionFinalResultTopicNames = new Set([
+  'สรุปผลการตรวจ',
+  'final result'
+]);
 
 function normalizeInstrumentPrefixes(prefixRows = []) {
   if (!Array.isArray(prefixRows) || prefixRows.length !== 5) {
@@ -238,6 +242,10 @@ function validateMeasurementValue(value, topic, fieldName) {
     return '';
   }
 
+  if (text === '-') {
+    return '-';
+  }
+
   if (topic.inputType === 'pass_fail') {
     if (!['pass', 'fail'].includes(text)) {
       throw createHttpError(400, `${fieldName}ต้องเป็น pass หรือ fail`);
@@ -292,8 +300,9 @@ function getPiecesValue(topicData, pieceNo, inputIndex) {
 
 export function hasDimensionFailResult(piecesData) {
   const topics = Array.isArray(piecesData?.topics) ? piecesData.topics : [];
+  const hasExplicitNgStop = Boolean(piecesData?.meta?.ngStop);
 
-  return topics.some((topic) => (
+  return hasExplicitNgStop || topics.some((topic) => (
     Array.isArray(topic?.rows)
     && topic.rows.some((row) => (
       Array.isArray(row?.values)
@@ -348,6 +357,10 @@ function attachInspectionNote(piecesData, inspectionNote) {
     delete meta.inspectionNote;
   }
 
+  if (piecesData?.meta?.ngStop) {
+    meta.ngStop = piecesData.meta.ngStop;
+  }
+
   if (Object.keys(meta).length) {
     normalizedPiecesData.meta = meta;
   } else {
@@ -390,11 +403,17 @@ function attachInspectionSaveSnapshot(piecesData, status, user) {
   return normalizedPiecesData;
 }
 
-function mergeDraftPiecesData(existingPiecesData, incomingPiecesData, formConfig, sampleCount, input = {}) {
+export function mergeDraftPiecesData(existingPiecesData, incomingPiecesData, formConfig, sampleCount, input = {}) {
   const safeSampleCount = Number(sampleCount || 0);
   const inspectionNote = hasInspectionNoteField(incomingPiecesData)
     ? cleanInspectionNoteFromPiecesData(incomingPiecesData)
     : cleanInspectionNoteFromPiecesData(existingPiecesData);
+  const incomingMeta = incomingPiecesData?.meta && typeof incomingPiecesData.meta === 'object'
+    ? incomingPiecesData.meta
+    : null;
+  const ngStop = incomingMeta
+    ? incomingMeta.ngStop || null
+    : existingPiecesData?.meta?.ngStop || null;
 
   if (!Array.isArray(formConfig) || !formConfig.length || !Number.isInteger(safeSampleCount) || safeSampleCount <= 0) {
     return attachInspectionNote(incomingPiecesData, inspectionNote);
@@ -443,7 +462,88 @@ function mergeDraftPiecesData(existingPiecesData, incomingPiecesData, formConfig
     }
   });
 
-  return attachInspectionNote({ topics }, inspectionNote);
+  return attachInspectionNote({
+    topics,
+    meta: ngStop ? { ngStop } : {}
+  }, inspectionNote);
+}
+
+function normalizeDimensionNgStop(piecesData, formConfig) {
+  const rawNgStop = piecesData?.meta?.ngStop;
+
+  if (rawNgStop === null || rawNgStop === undefined || rawNgStop === false) {
+    return null;
+  }
+
+  if (!rawNgStop || typeof rawNgStop !== 'object' || Array.isArray(rawNgStop)) {
+    throw createHttpError(400, 'ข้อมูลจุดยุติการตรวจเนื่องจาก NG ไม่ถูกต้อง');
+  }
+
+  const topicId = cleanText(rawNgStop.topicId);
+  const topicName = cleanText(rawNgStop.topicName);
+  const topicById = topicId
+    ? formConfig.find((topic) => String(topic.id) === topicId)
+    : null;
+  const topicByName = topicName
+    ? formConfig.find((topic) => topic.topicName === topicName)
+    : null;
+  const hasMismatchedTopic = (
+    (topicId && !topicById)
+    || (topicName && !topicByName)
+    || (
+      topicById
+      && topicByName
+      && String(topicById.id) !== String(topicByName.id)
+    )
+  );
+  const matchedTopic = topicById || topicByName;
+
+  if (!matchedTopic || hasMismatchedTopic) {
+    throw createHttpError(400, 'หัวข้อที่พบ NG ไม่ตรงกับฟอร์มตรวจมิติปัจจุบัน');
+  }
+
+  const finalResultTopic = getDimensionFinalResultTopic(formConfig);
+
+  if (finalResultTopic && String(matchedTopic.id) === String(finalResultTopic.id)) {
+    throw createHttpError(400, `หัวข้อ ${finalResultTopic.topicName} ใช้สรุปผลเท่านั้น กรุณาเลือกหัวข้อที่พบ NG จริง`);
+  }
+
+  return {
+    topicId: matchedTopic.id,
+    topicName: matchedTopic.topicName
+  };
+}
+
+function getDimensionInspectionTopicOrder(formConfig = []) {
+  return formConfig
+    .map((topic, originalIndex) => ({ topic, originalIndex }))
+    .sort((left, right) => {
+      const leftTypeOrder = left.topic.inputType === 'pass_fail' ? 1 : 0;
+      const rightTypeOrder = right.topic.inputType === 'pass_fail' ? 1 : 0;
+
+      return leftTypeOrder - rightTypeOrder || left.originalIndex - right.originalIndex;
+    })
+    .map(({ topic }) => topic);
+}
+
+function isDimensionFinalResultTopic(topic) {
+  const topicName = cleanText(topic?.topicName).toLocaleLowerCase();
+
+  return topic?.inputType === 'pass_fail' && (
+    topic?.ruleKey === 'final_result'
+    || dimensionFinalResultTopicNames.has(topicName)
+  );
+}
+
+export function getDimensionFinalResultTopic(formConfig = []) {
+  const matches = getDimensionInspectionTopicOrder(formConfig)
+    .filter(isDimensionFinalResultTopic);
+
+  if (matches.length > 1) {
+    throw createHttpError(400, 'พบหัวข้อสรุปผลการตรวจมากกว่า 1 หัวข้อ กรุณาตรวจการตั้งค่าระบบ');
+  }
+
+  return matches[0] || null;
 }
 
 function requireCompletePiecesData(piecesData, formConfig, sampleCount, input = {}) {
@@ -453,9 +553,29 @@ function requireCompletePiecesData(piecesData, formConfig, sampleCount, input = 
     throw createHttpError(400, 'ยังไม่มีหัวข้อฟอร์มตรวจมิติสำหรับบันทึกสมบูรณ์');
   }
 
-  let requiredCellCount = 0;
+  const orderedFormConfig = getDimensionInspectionTopicOrder(formConfig);
+  const ngStop = piecesData?.meta?.ngStop || null;
+  const ngStopIndex = ngStop
+    ? orderedFormConfig.findIndex((topic) => String(topic.id) === String(ngStop.topicId))
+    : -1;
+  const finalResultTopic = getDimensionFinalResultTopic(formConfig);
+  const finalResultIndex = finalResultTopic
+    ? orderedFormConfig.findIndex((topic) => String(topic.id) === String(finalResultTopic.id))
+    : -1;
 
-  for (const configTopic of formConfig) {
+  if (!finalResultTopic) {
+    throw createHttpError(400, 'ไม่พบหัวข้อสรุปผลการตรวจ กรุณาตรวจการตั้งค่าระบบ');
+  }
+  let requiredCellCount = 0;
+  let hasMeasuredValueAtNgStop = false;
+  let hasAnyFail = false;
+  let hasFinalResultFail = false;
+
+  if (ngStop && !finalResultTopic) {
+    throw createHttpError(400, 'ต้องมีหัวข้อสรุปผลการตรวจก่อนบันทึกงาน NG');
+  }
+
+  for (const [topicOrder, configTopic] of orderedFormConfig.entries()) {
     const inputCount = Number(configTopic.inputCount || 0);
 
     if (!Number.isInteger(inputCount) || inputCount <= 0) {
@@ -463,6 +583,8 @@ function requireCompletePiecesData(piecesData, formConfig, sampleCount, input = 
     }
 
     const topicData = findPiecesTopic(piecesData, configTopic);
+    const topicValues = [];
+    const missingCells = [];
 
     for (let pieceNo = 1; pieceNo <= safeSampleCount; pieceNo += 1) {
       if (!shouldMeasureTopicCell(configTopic, pieceNo, input)) {
@@ -471,20 +593,139 @@ function requireCompletePiecesData(piecesData, formConfig, sampleCount, input = 
 
       for (let inputIndex = 0; inputIndex < inputCount; inputIndex += 1) {
         requiredCellCount += 1;
+        const value = cleanText(getPiecesValue(topicData, pieceNo, inputIndex));
+        const isSkippedValue = !value || value === '-';
 
-        if (!cleanText(getPiecesValue(topicData, pieceNo, inputIndex))) {
-          throw createHttpError(
-            400,
-            `กรุณากรอกหัวข้อ ${configTopic.topicName} ชิ้นที่ ${pieceNo} ช่องที่ ${inputIndex + 1} ให้ครบก่อนบันทึกสมบูรณ์`
-          );
+        topicValues.push(value);
+
+        if (isSkippedValue) {
+          missingCells.push({ pieceNo, inputIndex });
+        }
+
+        if (value === 'fail') {
+          hasAnyFail = true;
+
+          if (topicOrder === finalResultIndex) {
+            hasFinalResultFail = true;
+          }
+        }
+
+        if (
+          topicOrder === ngStopIndex
+          && !isSkippedValue
+          && (
+            configTopic.inputType !== 'pass_fail'
+            || value === 'fail'
+          )
+        ) {
+          hasMeasuredValueAtNgStop = true;
         }
       }
+    }
+
+    const isRequiredThroughNg = ngStopIndex < 0 || topicOrder <= ngStopIndex;
+    const isFinalResult = topicOrder === finalResultIndex;
+    const hasStartedOptionalTopic = topicValues.some((value) => value && value !== '-');
+
+    if (
+      (isRequiredThroughNg || isFinalResult || hasStartedOptionalTopic)
+      && missingCells.length
+    ) {
+      const firstMissing = missingCells[0];
+
+      throw createHttpError(
+        400,
+        `กรุณากรอกหัวข้อ ${configTopic.topicName} ชิ้นที่ ${firstMissing.pieceNo} ช่องที่ ${firstMissing.inputIndex + 1} ให้ครบก่อนบันทึกสมบูรณ์`
+      );
     }
   }
 
   if (!requiredCellCount) {
     throw createHttpError(400, 'ไม่มีช่องตรวจมิติที่ต้องกรอกสำหรับบันทึกสมบูรณ์');
   }
+
+  if (ngStop && !hasMeasuredValueAtNgStop) {
+    throw createHttpError(400, `หัวข้อ ${ngStop.topicName} ต้องมีค่าที่ตรวจจริงครบก่อนบันทึกงาน NG`);
+  }
+
+  if (hasAnyFail && finalResultTopic && !hasFinalResultFail) {
+    throw createHttpError(400, `หัวข้อ ${finalResultTopic.topicName} ต้องเลือกไม่ผ่านเมื่อพบงาน NG`);
+  }
+
+  if (hasFinalResultFail && !ngStop) {
+    throw createHttpError(400, 'กรุณาเลือกหัวข้อที่พบ NG ก่อนบันทึกสมบูรณ์');
+  }
+
+  if (ngStop && !hasFinalResultFail) {
+    throw createHttpError(400, `หัวข้อ ${finalResultTopic.topicName} ต้องเลือกไม่ผ่านสำหรับงาน NG`);
+  }
+}
+
+function markSkippedMeasurementsAfterNgStop(piecesData, formConfig, sampleCount, input = {}) {
+  const ngStop = piecesData?.meta?.ngStop;
+
+  if (!ngStop) {
+    return piecesData;
+  }
+
+  const safeSampleCount = Number(sampleCount || 0);
+  const orderedFormConfig = getDimensionInspectionTopicOrder(formConfig);
+  const ngStopIndex = orderedFormConfig.findIndex(
+    (topic) => String(topic.id) === String(ngStop.topicId)
+  );
+  const finalResultTopic = getDimensionFinalResultTopic(formConfig);
+  const topicOrderById = new Map(
+    orderedFormConfig.map((topic, index) => [String(topic.id), index])
+  );
+
+  const topics = formConfig.map((configTopic) => {
+    const existingTopic = findPiecesTopic(piecesData, configTopic);
+    const topicOrder = topicOrderById.get(String(configTopic.id));
+
+    if (
+      topicOrder <= ngStopIndex
+      || String(configTopic.id) === String(finalResultTopic?.id || '')
+    ) {
+      return existingTopic;
+    }
+
+    const inputCount = Number(configTopic.inputCount || 0);
+    const rows = [];
+    let hasMeasuredValue = false;
+
+    for (let pieceNo = 1; pieceNo <= safeSampleCount; pieceNo += 1) {
+      if (!shouldMeasureTopicCell(configTopic, pieceNo, input)) {
+        continue;
+      }
+
+      const values = Array.from({ length: inputCount }, (_, inputIndex) => {
+        const value = cleanText(getPiecesValue(existingTopic, pieceNo, inputIndex));
+
+        if (value && value !== '-') {
+          hasMeasuredValue = true;
+        }
+
+        return value || '-';
+      });
+
+      rows.push({ pieceNo, values });
+    }
+
+    if (hasMeasuredValue) {
+      return existingTopic;
+    }
+
+    return {
+      topicId: configTopic.id,
+      topicName: configTopic.topicName,
+      rows
+    };
+  }).filter(Boolean);
+
+  return {
+    ...piecesData,
+    topics
+  };
 }
 
 function validatePiecesData(piecesData, formConfig, sampleCount, isComplete, input = {}) {
@@ -515,6 +756,15 @@ function validatePiecesData(piecesData, formConfig, sampleCount, isComplete, inp
 
   const configById = new Map(formConfig.map((topic) => [String(topic.id), topic]));
   const configByName = new Map(formConfig.map((topic) => [topic.topicName, topic]));
+  const ngStop = normalizeDimensionNgStop(piecesData, formConfig);
+  const orderedFormConfig = getDimensionInspectionTopicOrder(formConfig);
+  const finalResultTopic = getDimensionFinalResultTopic(formConfig);
+  const ngStopIndex = ngStop
+    ? orderedFormConfig.findIndex((topic) => String(topic.id) === String(ngStop.topicId))
+    : -1;
+  const topicOrderById = new Map(
+    orderedFormConfig.map((topic, index) => [String(topic.id), index])
+  );
   const seenTopicIds = new Set();
 
   const normalizedTopics = topics.map((topicInput, topicIndex) => {
@@ -565,13 +815,42 @@ function validatePiecesData(piecesData, formConfig, sampleCount, isComplete, inp
 
       return {
         pieceNo,
-        values: Array.from({ length: inputCount }, (_, inputIndex) => (
-          validateMeasurementValue(values[inputIndex], topic, `หัวข้อ ${topic.topicName} ชิ้นที่ ${pieceNo} ช่องที่ ${inputIndex + 1}`)
-        ))
+        values: Array.from({ length: inputCount }, (_, inputIndex) => {
+          const normalizedValue = validateMeasurementValue(
+            values[inputIndex],
+            topic,
+            `หัวข้อ ${topic.topicName} ชิ้นที่ ${pieceNo} ช่องที่ ${inputIndex + 1}`
+          );
+          const topicOrder = topicOrderById.get(topicKey);
+
+          if (
+            normalizedValue === '-'
+            && (
+              ngStopIndex < 0
+              || topicOrder <= ngStopIndex
+              || String(topic.id) === String(finalResultTopic?.id || '')
+            )
+          ) {
+            throw createHttpError(
+              400,
+              `หัวข้อ ${topic.topicName} ใช้เครื่องหมาย - ได้เฉพาะช่องที่ไม่ได้ตรวจหลังยุติการตรวจเนื่องจาก NG`
+            );
+          }
+
+          return normalizedValue;
+        })
       };
     });
 
-    if (isComplete && !normalizedRows.length) {
+    if (
+      isComplete
+      && !normalizedRows.length
+      && (
+        ngStopIndex < 0
+        || topicOrderById.get(topicKey) <= ngStopIndex
+        || topicKey === String(finalResultTopic?.id || '')
+      )
+    ) {
       throw createHttpError(400, `หัวข้อ ${topic.topicName} ยังไม่มีข้อมูลชิ้นงาน`);
     }
 
@@ -582,7 +861,10 @@ function validatePiecesData(piecesData, formConfig, sampleCount, isComplete, inp
     };
   });
 
-  return attachInspectionNote({ topics: normalizedTopics }, inspectionNote);
+  return attachInspectionNote({
+    meta: ngStop ? { ngStop } : {},
+    topics: normalizedTopics
+  }, inspectionNote);
 }
 
 function hasJsonContent(value) {
@@ -601,16 +883,6 @@ function requireCompleteJsonContent({ formConfigSnapshot, piecesData }) {
   if (!hasJsonContent(piecesData)) {
     throw createHttpError(400, 'ข้อมูลชิ้นงานที่วัดต้องมีข้อมูลอย่างน้อย 1 รายการ');
   }
-}
-
-async function resolveCompleteFormConfigSnapshot(currentInspection, connection) {
-  const existingSnapshot = parseJsonColumn(currentInspection?.form_config_snapshot);
-
-  if (currentInspection?.status === 'completed' && hasJsonContent(existingSnapshot)) {
-    return existingSnapshot;
-  }
-
-  return getActiveDimensionFormConfig(connection);
 }
 
 function requireActorUser(user) {
@@ -1125,9 +1397,7 @@ async function saveDimensionInspection({ lotNumber, input, user, status, isCompl
       configuredSampleCount
     });
     const activeFormConfig = await getActiveDimensionFormConfig(connection);
-    const piecesDataConfig = isComplete
-      ? await resolveCompleteFormConfigSnapshot(currentInspection, connection)
-      : activeFormConfig;
+    const piecesDataConfig = activeFormConfig;
 
     if (isComplete) {
       normalizedInput.formConfigSnapshot = piecesDataConfig;
@@ -1156,6 +1426,12 @@ async function saveDimensionInspection({ lotNumber, input, user, status, isCompl
         normalizedInput
       );
       requireInspectionNoteForFailedDimension(normalizedInput.piecesData);
+      normalizedInput.piecesData = markSkippedMeasurementsAfterNgStop(
+        normalizedInput.piecesData,
+        piecesDataConfig,
+        normalizedInput.sampleCount,
+        normalizedInput
+      );
     } else {
       const existingPiecesData = parseJsonColumn(currentInspection?.pieces_data, { topics: [] });
       const mergedPiecesData = mergeDraftPiecesData(

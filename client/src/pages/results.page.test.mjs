@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
 import { renderResultsPage } from './results.page.js';
 
@@ -46,4 +47,15 @@ test('results page does not offer all rows page size', () => {
   });
 
   assert.doesNotMatch(html, /<option value="all">/);
+});
+
+test('results page gives the Lot search field a wide responsive grid column', async () => {
+  const html = renderResultsPage();
+  const css = await readFile(new URL('../styles/main.css', import.meta.url), 'utf8');
+
+  assert.match(html, /inspection-queue-filters results-filter-layout/);
+  assert.match(
+    css,
+    /\.results-filter-layout\s*\{[\s\S]*grid-template-columns:\s*minmax\(150px,\s*190px\)\s+auto\s+minmax\(320px,\s*1fr\)/
+  );
 });

@@ -288,6 +288,42 @@ test('approval queue search treats PostgreSQL wildcard characters as text', asyn
   ]);
 });
 
+test('approval queue and badge require acknowledgement from the current NG cycle', async (t) => {
+  const originalQuery = postgresDb.query;
+  const calls = [];
+
+  t.after(() => {
+    postgresDb.query = originalQuery;
+  });
+
+  postgresDb.query = async (sql, params = []) => {
+    calls.push({ sql, params });
+    return { rows: [{ total: 0 }] };
+  };
+
+  await getApprovalQueue({
+    tab: 'ng',
+    date: '',
+    search: '',
+    page: 1,
+    pageSize: 50
+  });
+
+  const countQuery = calls[0];
+  const listQuery = calls[1];
+  const badgeQuery = calls[2];
+
+  assert.match(countQuery.sql, /NOT EXISTS[\s\S]*FROM lot_audit_logs[\s\S]*action = \$2/i);
+  assert.match(listQuery.sql, /NOT EXISTS[\s\S]*FROM lot_audit_logs[\s\S]*action = \$2/i);
+  assert.match(countQuery.sql, /reviewed_ng\.action = 'review_ng'[\s\S]*reviewed_ng\.id > acknowledged_ng\.id/i);
+  assert.match(listQuery.sql, /reviewed_ng\.action = 'review_ng'[\s\S]*reviewed_ng\.id > acknowledged_ng\.id/i);
+  assert.deepEqual(countQuery.params, ['ng', 'confirm_ng']);
+  assert.deepEqual(listQuery.params, ['ng', 'confirm_ng']);
+  assert.match(badgeQuery.sql, /NOT EXISTS[\s\S]*FROM lot_audit_logs[\s\S]*action = \$1/i);
+  assert.match(badgeQuery.sql, /reviewed_ng\.action = 'review_ng'[\s\S]*reviewed_ng\.id > acknowledged_ng\.id/i);
+  assert.deepEqual(badgeQuery.params, ['confirm_ng']);
+});
+
 test('approval workflow uses shared inspection fail helpers', () => {
   assert.equal(hasDimensionFailResult({
     topics: [{ rows: [{ values: ['pass', 'fail'] }] }]

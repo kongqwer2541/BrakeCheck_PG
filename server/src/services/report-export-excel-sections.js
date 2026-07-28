@@ -146,10 +146,20 @@ function addSingleSheetDimensionSection(sheet, lot, deps) {
 
 function addSingleSheetPackingSection(sheet, lot, deps) {
   const inspection = lot.packingInspection;
+
+  addReportSectionTitle(sheet, 'ฟอร์มตรวจบรรจุ');
+
+  if (lot.status === 'ng' && !inspection.status) {
+    addReportKeyValueGrid(sheet, [
+      ['สถานะ', 'ไม่ได้ตรวจบรรจุ'],
+      ['เหตุผล', 'NG ตั้งแต่ตรวจมิติ']
+    ], { pairsPerRow: 1 });
+    return;
+  }
+
   const resultsData = inspection.resultsData || { meta: {}, topics: [] };
   const packingSummary = deps.getPackingSummary(resultsData);
 
-  addReportSectionTitle(sheet, 'ฟอร์มตรวจบรรจุ');
   addReportKeyValueGrid(sheet, [
     ['สถานะ', inspection.status || '-'],
     ['สรุปผล', packingSummary.label],

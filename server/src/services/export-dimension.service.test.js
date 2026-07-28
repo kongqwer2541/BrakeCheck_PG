@@ -97,6 +97,12 @@ test('export dimension preview uses PostgreSQL filters and escaped search', asyn
   assert.match(calls[0].sql, /lots\.model_name ILIKE \$1 ESCAPE '\\'/);
   assert.match(calls[0].sql, /lots\.production_date BETWEEN \$2 AND \$3/);
   assert.match(calls[0].sql, /dimension_inspections\.inspection_date BETWEEN \$4 AND \$5/);
+  assert.match(calls[0].sql, /lots\.status = 'approved'/);
+  assert.match(calls[0].sql, /lots\.status = 'ng'[\s\S]*lot_audit_logs[\s\S]*confirm_ng/);
+  assert.match(
+    calls[0].sql,
+    /reviewed_ng\.action = 'review_ng'[\s\S]*reviewed_ng\.id > confirmed_ng\.id/
+  );
   assert.deepEqual(calls[0].params, [
     '%ABC\\%\\_\\\\1%',
     '2026-06-01',
@@ -132,6 +138,8 @@ test('dimension export creates PostgreSQL placeholders for selected lot ids', as
   const result = await buildExportDimensionExcel({ lotIds: [7, 9], topicNames: [] });
 
   assert.match(calls[0].sql, /lots\.id IN \(\$1, \$2\)/);
+  assert.match(calls[0].sql, /lots\.status = 'approved'/);
+  assert.match(calls[0].sql, /lots\.status = 'ng'[\s\S]*lot_audit_logs[\s\S]*confirm_ng/);
   assert.deepEqual(calls[0].params, [7, 9]);
   assert.ok(result.buffer.length > 0);
 });
@@ -268,6 +276,73 @@ test('export dimension excel workbook creates raw, skipped, summary, and metadat
       metadataSheet.getColumn(1).values.includes('exported_by') ||
       metadataSheet.getColumn(1).values.includes('exported_by_role'),
     false
+  );
+  assert.ok(
+    metadataSheet.getColumn(2).values.includes('approved_and_confirmed_ng_completed_dimension')
+  );
+});
+
+test('dimension export identifies values skipped after an explicit NG stop', () => {
+  const formConfig = JSON.parse(baseRow.form_config_snapshot);
+  const piecesData = JSON.parse(baseRow.pieces_data);
+  const ngTopic = formConfig[0];
+  const optionalSkippedTopic = {
+    id: 14,
+    topicName: 'Optional after NG',
+    inputCount: 2,
+    inputType: 'number'
+  };
+  const optionalMeasuredTopic = {
+    id: 15,
+    topicName: 'Measured after NG',
+    inputCount: 2,
+    inputType: 'number'
+  };
+
+  formConfig.splice(1, 0, optionalSkippedTopic, optionalMeasuredTopic);
+  piecesData.meta = {
+    inspectionNote: 'Stopped after thickness failed',
+    ngStop: { topicId: ngTopic.id, topicName: ngTopic.topicName }
+  };
+  piecesData.topics[0].rows = [
+    { pieceNo: 1, values: ['10.20', '10.21', '-'] },
+    { pieceNo: 2, values: ['10.30', '10.31', '10.32'] }
+  ];
+  piecesData.topics.splice(
+    1,
+    0,
+    {
+      topicId: optionalSkippedTopic.id,
+      topicName: optionalSkippedTopic.topicName,
+      rows: [{ pieceNo: 1, values: ['-', '-'] }]
+    },
+    {
+      topicId: optionalMeasuredTopic.id,
+      topicName: optionalMeasuredTopic.topicName,
+      rows: [{ pieceNo: 1, values: ['11.11', '11.12'] }]
+    }
+  );
+
+  const { workbook } = buildExportDimensionWorkbookFromRows([{
+    ...baseRow,
+    lot_status: 'ng',
+    form_config_snapshot: JSON.stringify(formConfig),
+    pieces_data: JSON.stringify(piecesData)
+  }], {
+    topicNames: [
+      ngTopic.topicName,
+      optionalSkippedTopic.topicName,
+      optionalMeasuredTopic.topicName
+    ]
+  });
+
+  assert.deepEqual(
+    workbook.getWorksheet('raw_data').getColumn('measured_value').values.slice(2),
+    [10.2, 10.21, 10.3, 10.31, 10.32, 11.11, 11.12]
+  );
+  assert.deepEqual(
+    workbook.getWorksheet('skipped_values').getColumn('skip_reason').values.slice(2),
+    ['dash', 'stopped_after_ng', 'stopped_after_ng']
   );
 });
 

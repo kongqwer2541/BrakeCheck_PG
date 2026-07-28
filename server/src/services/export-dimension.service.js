@@ -1,6 +1,7 @@
 import ExcelJS from 'exceljs';
 
 import { postgresDb } from '../config/database.js';
+import { createCurrentNgConfirmationExistsSql } from './lot-approval-evidence.service.js';
 
 const maxModelSearchLength = 200;
 const minModelSearchLengthWithoutProductionDate = 3;
@@ -232,7 +233,7 @@ export function normalizeExportDimensionPreviewFilters(query = {}) {
 
 function buildPreviewWhere(filters) {
   const conditions = [
-    "lots.status = 'approved'",
+    getExportableLotStatusCondition(),
     "dimension_inspections.status = 'completed'"
   ];
   const params = [];
@@ -265,6 +266,13 @@ function buildPreviewWhere(filters) {
     sql: conditions.join(' AND '),
     params
   };
+}
+
+function getExportableLotStatusCondition() {
+  return `(lots.status = 'approved' OR (
+    lots.status = 'ng'
+    AND ${createCurrentNgConfirmationExistsSql()}
+  ))`;
 }
 
 function getSavedTopicByConfig(savedTopics, configTopic) {
@@ -320,7 +328,7 @@ function isNumericMeasurementValue(value) {
   return /^-?\d+(\.\d+)?$/.test(text) && Number.isFinite(Number(text));
 }
 
-function getMeasurementSkipReason(value) {
+function getMeasurementSkipReason(value, isStoppedAfterNg = false) {
   const text = cleanText(value);
 
   if (!text) {
@@ -328,7 +336,7 @@ function getMeasurementSkipReason(value) {
   }
 
   if (text === '-') {
-    return 'dash';
+    return isStoppedAfterNg ? 'stopped_after_ng' : 'dash';
   }
 
   return isNumericMeasurementValue(text) ? '' : 'not_numeric';
@@ -475,9 +483,22 @@ function buildMeasurementRowsForLot(row, selectedTopicNames, currentMeasurementC
 
   const instrumentCodeText = getInstrumentCodeText(instrumentCodesSnapshot.data);
 
-  normalizeDimensionTopics(piecesDataSnapshot.data, formConfigSnapshot.data)
-    .filter((topic) => topic.inputType !== 'pass_fail')
-    .forEach((topic) => {
+  const normalizedTopics = normalizeDimensionTopics(
+    piecesDataSnapshot.data,
+    formConfigSnapshot.data
+  );
+  const ngStop = piecesDataSnapshot.data?.meta?.ngStop;
+  const ngStopIndex = ngStop
+    ? normalizedTopics.findIndex((topic) => (
+      String(topic.topicId) === String(ngStop.topicId)
+      || topic.topicName === ngStop.topicName
+    ))
+    : -1;
+
+  normalizedTopics
+    .map((topic, topicIndex) => ({ topic, topicIndex }))
+    .filter(({ topic }) => topic.inputType !== 'pass_fail')
+    .forEach(({ topic, topicIndex }) => {
       const topicName = cleanText(topic.topicName) || '-';
 
       if (selectedTopicSet.size && !selectedTopicSet.has(topicName)) {
@@ -493,7 +514,10 @@ function buildMeasurementRowsForLot(row, selectedTopicNames, currentMeasurementC
 
         for (let inputIndex = 0; inputIndex < inputCount; inputIndex += 1) {
           const rawValue = values[inputIndex];
-          const skipReason = getMeasurementSkipReason(rawValue);
+          const skipReason = getMeasurementSkipReason(
+            rawValue,
+            ngStopIndex >= 0 && topicIndex > ngStopIndex
+          );
           const baseRow = createMeasurementBaseRow(row, topicName, pieceNo, inputIndex, instrumentCodeText);
 
           if (skipReason) {
@@ -712,7 +736,7 @@ function addMetadataSheet(workbook, exportData, topicNames) {
 
   sheet.addRows([
     ['key', 'value'],
-    ['export_scope', 'approved_lots_completed_dimension_only'],
+    ['export_scope', 'approved_and_confirmed_ng_completed_dimension'],
     ['selected_topics', selectedTopics],
     ['lot_count', exportData.summary.totalLots],
     ['numeric_value_count', exportData.summary.numericValueCount],
@@ -821,7 +845,7 @@ async function findExportDimensionRowsByLotIds(lotIds) {
      LEFT JOIN users completed_user
        ON completed_user.id = dimension_inspections.completed_by
      WHERE lots.id IN (${placeholders})
-       AND lots.status = 'approved'
+       AND ${getExportableLotStatusCondition()}
        AND dimension_inspections.status = 'completed'
      ORDER BY lots.production_date DESC, lots.lot_number ASC`,
     lotIds

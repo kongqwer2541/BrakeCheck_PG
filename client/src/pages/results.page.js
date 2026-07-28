@@ -103,7 +103,7 @@ export function renderResultsPage({
         </button>
       </div>
 
-      <section class="dashboard-filters inspection-queue-filters" aria-label="ตัวกรอง Results">
+      <section class="dashboard-filters inspection-queue-filters results-filter-layout" aria-label="ตัวกรอง Results">
         <label class="field compact-field">
           วันที่
           <input id="resultsDate" type="date" value="${escapeHtml(endDate || startDate)}" ${isLoading ? 'disabled' : ''} />

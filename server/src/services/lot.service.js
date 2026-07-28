@@ -1,6 +1,7 @@
 import { postgresDb } from '../config/database.js';
 import { withPostgresTransaction } from '../utils/postgres-transaction.js';
 import { hasDimensionFailResult } from './dimension-inspection.service.js';
+import { createCurrentNgConfirmationExistsSql } from './lot-approval-evidence.service.js';
 import { hasPackingFailResult } from './packing-inspection.service.js';
 
 const maxTextLength = {
@@ -628,9 +629,16 @@ export function requireNoDuplicateConfirmNg(action, existingAuditCount) {
 async function countLotAuditAction({ lotId, action, connection }) {
   const { rows } = await connection.query(
     `SELECT COUNT(*) AS total
-     FROM lot_audit_logs
-     WHERE lot_id = $1
-       AND action = $2`,
+     FROM lot_audit_logs current_action
+     WHERE current_action.lot_id = $1
+       AND current_action.action = $2
+       AND NOT EXISTS (
+         SELECT 1
+         FROM lot_audit_logs reviewed_ng
+         WHERE reviewed_ng.lot_id = current_action.lot_id
+           AND reviewed_ng.action = 'review_ng'
+           AND reviewed_ng.id > current_action.id
+       )`,
     [lotId, action]
   );
 
@@ -719,21 +727,29 @@ export function buildApprovalQueueLimitClause(pageSize, offset) {
 }
 
 function createApprovalQueueWhere({ tab, date, search }) {
-  const conditions = ['status = $1'];
+  const conditions = ['lots.status = $1'];
   const params = [tab];
+
+  if (tab === 'ng') {
+    params.push('confirm_ng');
+    conditions.push(`NOT ${createCurrentNgConfirmationExistsSql({
+      confirmationAlias: 'acknowledged_ng',
+      actionExpression: `$${params.length}`
+    })}`);
+  }
 
   if (date) {
     params.push(date);
-    conditions.push(`production_date = $${params.length}`);
+    conditions.push(`lots.production_date = $${params.length}`);
   }
 
   if (search) {
     const firstSearchParam = params.length + 1;
     conditions.push(`(
-      lot_number ILIKE $${firstSearchParam} ESCAPE '\\'
-      OR lot_pack_barcode ILIKE $${firstSearchParam + 1} ESCAPE '\\'
-      OR lot_packing ILIKE $${firstSearchParam + 2} ESCAPE '\\'
-      OR model_name ILIKE $${firstSearchParam + 3} ESCAPE '\\'
+      lots.lot_number ILIKE $${firstSearchParam} ESCAPE '\\'
+      OR lots.lot_pack_barcode ILIKE $${firstSearchParam + 1} ESCAPE '\\'
+      OR lots.lot_packing ILIKE $${firstSearchParam + 2} ESCAPE '\\'
+      OR lots.model_name ILIKE $${firstSearchParam + 3} ESCAPE '\\'
     )`);
     const escapedSearch = search.replace(/[\\%_]/g, '\\$&');
     const likeSearch = `%${escapedSearch}%`;
@@ -816,7 +832,15 @@ export async function getApprovalQueue({ tab, date, search, page, pageSize }) {
   const { rows: badgeRows } = await postgresDb.query(
     `SELECT COUNT(*) AS total
      FROM lots
-     WHERE status IN ('waiting_approve', 'ng')`
+     WHERE lots.status = 'waiting_approve'
+       OR (
+         lots.status = 'ng'
+         AND NOT ${createCurrentNgConfirmationExistsSql({
+           confirmationAlias: 'acknowledged_ng',
+           actionExpression: '$1'
+         })}
+       )`,
+    ['confirm_ng']
   );
 
   return {

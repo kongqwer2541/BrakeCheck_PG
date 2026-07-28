@@ -64,6 +64,8 @@ test('results list returns only completed approved lots with approval evidence',
   assert.doesNotMatch(listQuery.sql, /action = 'approve'/);
   assert.match(countQuery.sql, /dimension_inspections\.status = 'completed'/);
   assert.match(countQuery.sql, /packing_inspections\.status = 'completed'/);
+  assert.match(countQuery.sql, /LEFT JOIN packing_inspections/);
+  assert.match(listQuery.sql, /LEFT JOIN packing_inspections/);
   assert.deepEqual(countQuery.params, ['approved', '2026-06-22', '2026-06-22', 'approve']);
   assert.deepEqual(listQuery.params, ['approved', '2026-06-22', '2026-06-22', 'approve']);
   assert.equal(result.items[0].lotNumber, 'L-APP-1');
@@ -118,7 +120,7 @@ test('results attachment count ignores deleted attachments', async () => {
   assert.equal(result.items[0].attachmentCount, 2);
 });
 
-test('results confirmed NG tab requires confirm_ng evidence', async () => {
+test('results confirmed NG tab requires confirm_ng evidence from the current NG cycle', async () => {
   const executed = [];
   const connection = {
     query: async (sql, params = []) => {
@@ -135,10 +137,36 @@ test('results confirmed NG tab requires confirm_ng evidence', async () => {
 
   const countQuery = executed.find((item) => item.sql.includes('COUNT(*)'));
   const listQuery = executed.find((item) => item.sql.includes('ORDER BY'));
+  const latestDateQuery = executed.find((item) => item.sql.includes('MAX(lots.production_date)'));
+  const countsQuery = executed.find((item) => item.sql.includes('confirmed_ng_count'));
   assert.match(countQuery.sql, /lots\.status = \$1/);
   assert.match(countQuery.sql, /action = \$2/);
   assert.doesNotMatch(countQuery.sql, /action = 'confirm_ng'/);
   assert.doesNotMatch(listQuery.sql, /action = 'confirm_ng'/);
+  assert.match(countQuery.sql, /LEFT JOIN packing_inspections/);
+  assert.match(listQuery.sql, /LEFT JOIN packing_inspections/);
+  assert.match(countQuery.sql, /reviewed_ng\.action = 'review_ng'[\s\S]*reviewed_ng\.id > evidence\.id/i);
+  assert.match(listQuery.sql, /reviewed_ng\.action = 'review_ng'[\s\S]*reviewed_ng\.id > evidence\.id/i);
+  assert.match(
+    countQuery.sql,
+    /packing_inspections\.id IS NULL OR packing_inspections\.status = 'completed'/
+  );
+  assert.match(
+    listQuery.sql,
+    /packing_inspections\.id IS NULL OR packing_inspections\.status = 'completed'/
+  );
+  assert.match(latestDateQuery.sql, /LEFT JOIN packing_inspections/);
+  assert.match(latestDateQuery.sql, /reviewed_ng\.action = 'review_ng'[\s\S]*reviewed_ng\.id > ng_logs\.id/i);
+  assert.match(
+    latestDateQuery.sql,
+    /packing_inspections\.id IS NULL OR packing_inspections\.status = 'completed'/
+  );
+  assert.match(countsQuery.sql, /LEFT JOIN packing_inspections/);
+  assert.match(countsQuery.sql, /reviewed_ng\.action = 'review_ng'[\s\S]*reviewed_ng\.id > ng_logs\.id/i);
+  assert.match(
+    countsQuery.sql,
+    /packing_inspections\.id IS NULL OR packing_inspections\.status = 'completed'/
+  );
   assert.deepEqual(countQuery.params, ['ng', 'confirm_ng']);
   assert.deepEqual(listQuery.params, ['ng', 'confirm_ng']);
 });

@@ -52,6 +52,8 @@ test('approval evidence uses a PostgreSQL result and parameter', async (t) => {
 
   assert.equal(result.approved.actorName, 'Admin');
   assert.match(executedSql, /a\.lot_id = \$1/i);
+  assert.match(executedSql, /reviewed_ng\.action = 'review_ng'/i);
+  assert.match(executedSql, /reviewed_ng\.id > a\.id/i);
   assert.deepEqual(executedParams, [7]);
 });
 

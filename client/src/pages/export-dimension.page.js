@@ -79,6 +79,13 @@ function renderRows(items = [], selectedLotIds = [], isLoading = false, isExport
   return items.map((item) => {
     const lotId = String(item.lotId || '');
     const isInvalid = Boolean(item.snapshotInvalid);
+    const isConfirmedNg = item.lotStatus === 'ng';
+    const statusClass = isInvalid || isConfirmedNg ? 'ng' : 'approved';
+    const statusLabel = isInvalid
+      ? 'Snapshot ผิดปกติ'
+      : isConfirmedNg
+        ? 'รับทราบ NG'
+        : 'Approved';
     return `
       <tr>
         <td>
@@ -102,8 +109,8 @@ function renderRows(items = [], selectedLotIds = [], isLoading = false, isExport
         <td>${escapeHtml(item.purchaseOrder)}</td>
         <td>${escapeHtml(item.quantity)}</td>
         <td>
-          <span class="lot-status ${isInvalid ? 'ng' : 'approved'}">
-            ${isInvalid ? 'Snapshot ผิดปกติ' : 'พร้อม Export'}
+          <span class="lot-status ${statusClass}">
+            ${statusLabel}
           </span>
           <small>${escapeHtml(item.numericValueCount)} ตัวเลข / ${escapeHtml(item.skippedValueCount)} ข้าม</small>
         </td>

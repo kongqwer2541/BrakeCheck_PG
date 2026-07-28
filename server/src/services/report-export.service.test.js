@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { inflateSync } from 'node:zlib';
+import ExcelJS from 'exceljs';
 
 import { db, postgresDb } from '../config/database.js';
 import {
@@ -156,6 +157,40 @@ test('report export queue uses PostgreSQL parameters and escaped search', async 
   assert.match(countQuery.sql, /lots\.lot_number ILIKE \$3 ESCAPE '\\'/);
   assert.deepEqual(countQuery.params, ['approved', '2026-07-18', '%LOT\\%\\_\\\\1%']);
   assert.equal(result.items[0].lotNumber, 'LOT-1');
+});
+
+test('report export requires NG acknowledgement from the current NG cycle', async (t) => {
+  const originalQuery = postgresDb.query;
+  const calls = [];
+
+  t.after(() => {
+    postgresDb.query = originalQuery;
+  });
+
+  postgresDb.query = async (sql, params = []) => {
+    calls.push({ sql, params });
+    if (/COUNT\(\*\)/i.test(sql)) return { rows: [{ total: 0 }] };
+    return { rows: [] };
+  };
+
+  await getReportExportLots({
+    tab: 'confirmed_ng',
+    date: '',
+    search: '',
+    page: 1,
+    pageSize: 50
+  });
+
+  const countQuery = calls.find(({ sql }) => /COUNT\(\*\)/i.test(sql));
+  const listQuery = calls.find(({ sql }) => /ORDER BY/i.test(sql));
+  assert.match(
+    countQuery.sql,
+    /reviewed_ng\.action = 'review_ng'[\s\S]*reviewed_ng\.id > confirmed_ng\.id/
+  );
+  assert.match(
+    listQuery.sql,
+    /reviewed_ng\.action = 'review_ng'[\s\S]*reviewed_ng\.id > confirmed_ng\.id/
+  );
 });
 
 test('report pdf export fails clearly when the Thai font is missing before querying data', async () => {
@@ -526,6 +561,54 @@ function readyLot(overrides = {}) {
   };
 }
 
+function dimensionOnlyNgReportRow() {
+  return {
+    id: 200,
+    lot_number: 'LOT-NG-DIM-1',
+    lot_pack_barcode: 'PACK-NG-1',
+    lot_packing: 'PROD-NG-1',
+    model_name: 'MODEL-NG',
+    dimension: '100x50',
+    aci_grade: 'A',
+    code: 'C-NG',
+    purchase_order: 'PO-NG',
+    production_date: '2026-07-23',
+    quantity: 100,
+    status: 'ng',
+    dimension_status: 'completed',
+    dimension_inspection_date: '2026-07-23',
+    dimension_shift: '1',
+    dimension_instrument_codes: JSON.stringify(['A-01-001']),
+    dimension_sample_count: 1,
+    dimension_form_config_snapshot: JSON.stringify([
+      { id: 1, topicName: 'สรุปผลการตรวจ', inputCount: 1, inputType: 'pass_fail' }
+    ]),
+    dimension_pieces_data: JSON.stringify({
+      meta: {
+        completedSavedByName: 'QC User',
+        completedSavedAt: '2026-07-23T02:00:00.000Z',
+        inspectionNote: 'พบผลไม่ผ่านตั้งแต่ตรวจมิติ'
+      },
+      topics: [{
+        topicId: 1,
+        topicName: 'สรุปผลการตรวจ',
+        inputType: 'pass_fail',
+        rows: [{ pieceNo: 1, values: ['fail'] }]
+      }]
+    }),
+    dimension_completed_at: '2026-07-23T02:00:00.000Z',
+    dimension_completed_by_name: 'QC User',
+    dimension_completed_by_position: 'QC',
+    packing_status: null,
+    packing_inspection_date: null,
+    packing_form_config_snapshot: null,
+    packing_results_data: null,
+    packing_completed_at: null,
+    packing_completed_by_name: null,
+    packing_completed_by_position: null
+  };
+}
+
 test('report export requires approval evidence for approved lots', () => {
   assert.doesNotThrow(() => assertReportReadyForExport(
     readyLot(),
@@ -536,6 +619,20 @@ test('report export requires approval evidence for approved lots', () => {
     () => assertReportReadyForExport(readyLot(), { approved: null, ngConfirmed: null }),
     /ไม่พบหลักฐานการอนุมัติ/
   );
+});
+
+test('report export allows acknowledged dimension-stage NG without a packing inspection', () => {
+  assert.doesNotThrow(() => assertReportReadyForExport(
+    readyLot({
+      status: 'ng',
+      packingInspection: {
+        status: '',
+        resultsData: { topics: [] },
+        snapshotInvalid: false
+      }
+    }),
+    { approved: null, ngConfirmed: { actorName: 'หัวหน้า' } }
+  ));
 });
 
 test('report export requires completed dimension and packing inspections', () => {
@@ -554,6 +651,59 @@ test('report export requires completed dimension and packing inspections', () =>
     ),
     /ใบตรวจบรรจุ/
   );
+});
+
+test('report export creates Excel and PDF for acknowledged dimension-stage NG', async (t) => {
+  const originalConnect = postgresDb.connect;
+  let releaseCount = 0;
+  const fakeConnection = {
+    query: async (sql) => {
+      if (sql.includes('FROM lots')) {
+        return { rows: [dimensionOnlyNgReportRow()] };
+      }
+
+      if (sql.includes('FROM lot_audit_logs a')) {
+        return { rows: [{
+          action: 'confirm_ng',
+          reason: 'รับทราบ NG',
+          created_at: '2026-07-23T03:00:00.000Z',
+          actor_name_snapshot: 'Head User',
+          actor_position_snapshot: 'Head'
+        }] };
+      }
+
+      throw new Error(`Unexpected query: ${sql}`);
+    },
+    release: () => {
+      releaseCount += 1;
+    }
+  };
+
+  t.after(() => {
+    postgresDb.connect = originalConnect;
+  });
+  postgresDb.connect = async () => fakeConnection;
+
+  const excelResult = await buildLotReportExcel({ lotNumber: 'LOT-NG-DIM-1' });
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(excelResult.buffer);
+  const cellTexts = [];
+  workbook.getWorksheet('report').eachRow((row) => {
+    row.eachCell((cell) => cellTexts.push(String(cell.value || '')));
+  });
+
+  assert.match(excelResult.fileName, /\.xlsx$/);
+  assert.ok(cellTexts.includes('ไม่ได้ตรวจบรรจุ'));
+  assert.ok(cellTexts.includes('NG ตั้งแต่ตรวจมิติ'));
+
+  const pdfResult = await buildLotReportPdf({ lotNumber: 'LOT-NG-DIM-1' });
+  const pdfSource = await readFile(new URL('./report-export-pdf-sections.js', import.meta.url), 'utf8');
+
+  assert.match(pdfResult.fileName, /\.pdf$/);
+  assert.equal(pdfResult.buffer.subarray(0, 5).toString(), '%PDF-');
+  assert.match(pdfSource, /ไม่ได้ตรวจบรรจุ/);
+  assert.match(pdfSource, /NG ตั้งแต่ตรวจมิติ/);
+  assert.equal(releaseCount, 2);
 });
 
 test('report export rejects invalid or empty completed snapshots', () => {

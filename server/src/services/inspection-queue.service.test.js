@@ -61,3 +61,87 @@ test('inspection queue uses PostgreSQL parameters and literal wildcard search', 
     '%LOT\\%\\_\\\\1%'
   ]);
 });
+
+test('packing queue excludes a lot that became NG during dimension inspection', async (t) => {
+  const originalQuery = postgresDb.query;
+
+  t.after(() => {
+    postgresDb.query = originalQuery;
+  });
+
+  postgresDb.query = async (sql) => {
+    if (/MAX\(production_date\)/i.test(sql)) {
+      return { rows: [{ latest_date: '2026-07-23' }] };
+    }
+
+    return {
+      rows: [{
+        lot_number: '260723002',
+        lot_pack_barcode: '260723002',
+        lot_packing: '260723-043',
+        model_name: 'Dimension NG test',
+        production_date: '2026-07-23',
+        status: 'ng',
+        dimension_status: 'completed',
+        packing_status: null,
+        latest_ng_reason: 'ตรวจมิติเปลี่ยนสถานะ Lot: waiting_pack -> NG'
+      }]
+    };
+  };
+
+  const result = await getInspectionQueue({
+    queueType: 'packing',
+    startDate: '2026-07-23',
+    endDate: '2026-07-23',
+    status: 'all',
+    search: '',
+    page: 1,
+    pageSize: 50
+  });
+
+  assert.equal(result.summary.totalItems, 0);
+  assert.equal(result.stats.total, 0);
+  assert.equal(result.stats.doneTotal, 0);
+});
+
+test('packing queue excludes dimension NG work that was sent back for fixing', async (t) => {
+  const originalQuery = postgresDb.query;
+
+  t.after(() => {
+    postgresDb.query = originalQuery;
+  });
+
+  postgresDb.query = async (sql) => {
+    if (/MAX\(production_date\)/i.test(sql)) {
+      return { rows: [{ latest_date: '2026-07-23' }] };
+    }
+
+    return {
+      rows: [{
+        lot_number: '260723002',
+        lot_pack_barcode: '260723002',
+        lot_packing: '260723-043',
+        model_name: 'Dimension NG sent back test',
+        production_date: '2026-07-23',
+        status: 'need_fix',
+        dimension_status: 'completed',
+        packing_status: null,
+        latest_ng_reason: 'ตรวจมิติเปลี่ยนสถานะ Lot: waiting_pack -> NG'
+      }]
+    };
+  };
+
+  const result = await getInspectionQueue({
+    queueType: 'packing',
+    startDate: '2026-07-23',
+    endDate: '2026-07-23',
+    status: 'all',
+    search: '',
+    page: 1,
+    pageSize: 50
+  });
+
+  assert.equal(result.summary.totalItems, 0);
+  assert.equal(result.stats.total, 0);
+  assert.equal(result.stats.need_fix, 0);
+});

@@ -1,4 +1,5 @@
 import { postgresDb } from '../config/database.js';
+import { createCurrentNgConfirmationExistsSql } from './lot-approval-evidence.service.js';
 
 const defaultPageSize = 50;
 const resultTabs = ['approved', 'confirmed_ng'];
@@ -113,20 +114,35 @@ function buildLimitClause(pageSize, offset) {
   return `LIMIT ${Number(pageSize) || defaultPageSize} OFFSET ${Number(offset) || 0}`;
 }
 
+function getPackingCompletionCondition(tab) {
+  return tab === 'confirmed_ng'
+    ? "(packing_inspections.id IS NULL OR packing_inspections.status = 'completed')"
+    : "packing_inspections.status = 'completed'";
+}
+
 function buildResultsWhere({ tab, dateRange, search }) {
   const params = [];
   const statusParam = addParameter(params, tab === 'confirmed_ng' ? 'ng' : 'approved');
   const base = buildResultsBaseWhere({ dateRange, search }, params);
-  const conditions = [`lots.status = ${statusParam}`, ...base.conditions];
+  const conditions = [
+    `lots.status = ${statusParam}`,
+    ...base.conditions,
+    getPackingCompletionCondition(tab)
+  ];
   const action = tab === 'confirmed_ng' ? 'confirm_ng' : 'approve';
   const actionParam = addParameter(params, action);
 
-  conditions.push(`EXISTS (
-    SELECT 1
-    FROM lot_audit_logs evidence
-    WHERE evidence.lot_id = lots.id
-      AND evidence.action = ${actionParam}
-  )`);
+  conditions.push(tab === 'confirmed_ng'
+    ? createCurrentNgConfirmationExistsSql({
+      confirmationAlias: 'evidence',
+      actionExpression: actionParam
+    })
+    : `EXISTS (
+      SELECT 1
+      FROM lot_audit_logs evidence
+      WHERE evidence.lot_id = lots.id
+        AND evidence.action = ${actionParam}
+    )`);
 
   return {
     sql: `WHERE ${conditions.join(' AND ')}`,
@@ -136,10 +152,7 @@ function buildResultsWhere({ tab, dateRange, search }) {
 }
 
 function buildResultsBaseWhere({ dateRange, search }, params = []) {
-  const conditions = [
-    "dimension_inspections.status = 'completed'",
-    "packing_inspections.status = 'completed'"
-  ];
+  const conditions = ["dimension_inspections.status = 'completed'"];
   if (dateRange) {
     const startDateParam = addParameter(params, dateRange.startDate);
     const endDateParam = addParameter(params, dateRange.endDate);
@@ -165,22 +178,25 @@ async function getLatestResultsDate(connection = postgresDb) {
     `SELECT MAX(lots.production_date) AS latest_date
      FROM lots
      INNER JOIN dimension_inspections ON dimension_inspections.lot_id = lots.id
-     INNER JOIN packing_inspections ON packing_inspections.lot_id = lots.id
+     LEFT JOIN packing_inspections ON packing_inspections.lot_id = lots.id
      WHERE lots.status IN ('approved', 'ng')
        AND dimension_inspections.status = 'completed'
-       AND packing_inspections.status = 'completed'
        AND (
-         EXISTS (
-           SELECT 1 FROM lot_audit_logs approved_logs
-           WHERE approved_logs.lot_id = lots.id
-             AND approved_logs.action = 'approve'
-             AND lots.status = 'approved'
+         (
+           lots.status = 'approved'
+           AND packing_inspections.status = 'completed'
+           AND EXISTS (
+             SELECT 1 FROM lot_audit_logs approved_logs
+             WHERE approved_logs.lot_id = lots.id
+               AND approved_logs.action = 'approve'
+           )
          )
-         OR EXISTS (
-           SELECT 1 FROM lot_audit_logs ng_logs
-           WHERE ng_logs.lot_id = lots.id
-             AND ng_logs.action = 'confirm_ng'
-             AND lots.status = 'ng'
+         OR (
+           lots.status = 'ng'
+           AND (packing_inspections.id IS NULL OR packing_inspections.status = 'completed')
+           AND ${createCurrentNgConfirmationExistsSql({
+             confirmationAlias: 'ng_logs'
+           })}
          )
        )`
   );
@@ -192,19 +208,21 @@ async function getResultCounts({ dateRange, search, connection = postgresDb }) {
   const base = buildResultsBaseWhere({ dateRange, search });
   const { rows } = await connection.query(
     `SELECT
-       SUM(CASE WHEN lots.status = 'approved' AND EXISTS (
-         SELECT 1 FROM lot_audit_logs approved_logs
-         WHERE approved_logs.lot_id = lots.id
-           AND approved_logs.action = 'approve'
-       ) THEN 1 ELSE 0 END) AS approved_count,
-       SUM(CASE WHEN lots.status = 'ng' AND EXISTS (
-         SELECT 1 FROM lot_audit_logs ng_logs
-         WHERE ng_logs.lot_id = lots.id
-           AND ng_logs.action = 'confirm_ng'
-       ) THEN 1 ELSE 0 END) AS confirmed_ng_count
+       SUM(CASE WHEN lots.status = 'approved'
+         AND packing_inspections.status = 'completed'
+         AND EXISTS (
+           SELECT 1 FROM lot_audit_logs approved_logs
+           WHERE approved_logs.lot_id = lots.id
+             AND approved_logs.action = 'approve'
+         ) THEN 1 ELSE 0 END) AS approved_count,
+       SUM(CASE WHEN lots.status = 'ng'
+         AND (packing_inspections.id IS NULL OR packing_inspections.status = 'completed')
+         AND ${createCurrentNgConfirmationExistsSql({
+           confirmationAlias: 'ng_logs'
+         })} THEN 1 ELSE 0 END) AS confirmed_ng_count
      FROM lots
      INNER JOIN dimension_inspections ON dimension_inspections.lot_id = lots.id
-     INNER JOIN packing_inspections ON packing_inspections.lot_id = lots.id
+     LEFT JOIN packing_inspections ON packing_inspections.lot_id = lots.id
      WHERE ${base.conditions.join(' AND ')}`,
     base.params
   );
@@ -257,7 +275,7 @@ export async function getResultsLots({
     `SELECT COUNT(*) AS total_items
      FROM lots
      INNER JOIN dimension_inspections ON dimension_inspections.lot_id = lots.id
-     INNER JOIN packing_inspections ON packing_inspections.lot_id = lots.id
+     LEFT JOIN packing_inspections ON packing_inspections.lot_id = lots.id
      ${where.sql}`,
     where.params
   );
@@ -284,7 +302,7 @@ export async function getResultsLots({
        COUNT(lot_attachments.id) AS attachment_count
      FROM lots
      INNER JOIN dimension_inspections ON dimension_inspections.lot_id = lots.id
-     INNER JOIN packing_inspections ON packing_inspections.lot_id = lots.id
+     LEFT JOIN packing_inspections ON packing_inspections.lot_id = lots.id
      INNER JOIN (
        SELECT lot_id, MAX(created_at) AS completed_at
        FROM lot_audit_logs

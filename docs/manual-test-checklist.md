@@ -1,5 +1,37 @@
 # Manual Test Checklist
 
+## Phase 8: PostgreSQL UAT
+
+เป้าหมายของ Phase นี้คือให้ผู้ใช้ยืนยันว่า BrakeCheck ทำงานกับ PostgreSQL ได้ครบตามงาน QC จริง โดยใช้ข้อมูลทดสอบเท่านั้น
+
+ข้อกำหนดก่อนเริ่ม:
+
+- ใช้ฐาน Local/Test และห้ามใช้ข้อมูลโรงงานจริง
+- ตรวจ `/api/database/health` ให้ชื่อฐานตรงกับฐานที่ตั้งใจทดสอบ
+- ใช้บัญชีทดสอบแยกสำหรับ `head`, `assistant` และ `officer`
+- ถ้าพบ Blocker ให้หยุดขั้นตอนนั้นและบันทึกอาการก่อนแก้โค้ด
+
+ผล Automated Tests วันที่ 2026-07-23:
+
+- [x] `node --test` ผ่าน 226/226 tests
+- [x] `node --check` ผ่าน JavaScript 134 ไฟล์
+- [x] ไม่พบ Automated Test ที่ล้มเหลวก่อนเริ่ม UAT
+
+ให้ใช้หัวข้อด้านล่างทดสอบ แล้วบันทึกผลสรุป:
+
+| กลุ่ม UAT | ผล | หมายเหตุ |
+| --- | --- | --- |
+| Health, Login, Logout และ Session | รอทดสอบ | |
+| สิทธิ์ `head`, `assistant`, `officer` | รอทดสอบ | |
+| Import Excel และ Validation | รอทดสอบ | |
+| ค้นหา Lot และ Lot Pack | รอทดสอบ | |
+| ตรวจมิติและตรวจบรรจุ | รอทดสอบ | |
+| NG, Approval, Lock และ Audit | รอทดสอบ | |
+| Results และ Export | รอทดสอบ | |
+| Backup/Restore Smoke Test | ผ่านจาก Phase 7 | |
+
+เงื่อนไขปิด Phase 8: Automated Tests ผ่าน, UAT ทุกกลุ่มผ่าน และไม่มี Blocker ที่กระทบ Workflow หลัก
+
 ใช้ checklist นี้หลังแก้ระบบหรือก่อนส่งงานให้ผู้ใช้ทดสอบ
 
 ไฟล์นี้เป็นแหล่งหลักเรื่องการทดสอบระบบ ถ้าระหว่างทดสอบเจอปัญหา ให้เปิด `docs/troubleshooting.md` และถ้างานเกี่ยวกับ migration หรือ schema ให้เปิด `docs/database-migration-guide.md` ก่อนทำต่อ
@@ -77,7 +109,7 @@
 ## Dashboard
 
 - เปิด Dashboard ได้หลัง login
-- แสดงข้อมูลจาก MySQL
+- แสดงข้อมูลจาก PostgreSQL
 - filter/search/pagination ใช้งานได้
 - loading, empty, error state แสดงถูกต้อง
 
