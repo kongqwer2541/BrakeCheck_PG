@@ -1,6 +1,9 @@
 import PDFDocument from 'pdfkit';
 import { postgresDb } from '../config/database.js';
-import { getLotApprovalEvidence } from './lot-approval-evidence.service.js';
+import {
+  createCurrentNgConfirmationExistsSql,
+  getLotApprovalEvidence
+} from './lot-approval-evidence.service.js';
 import {
   assertPdfThaiFontsAvailable,
   pdfFont,
@@ -197,12 +200,9 @@ function createReportWhere({ tab, date, search }) {
     conditions.push(`lots.status = ${addParameter(params, 'approved')}`);
   } else {
     const statusParam = addParameter(params, 'ng');
-    conditions.push(`lots.status = ${statusParam} AND EXISTS (
-      SELECT 1
-      FROM lot_audit_logs confirmed_ng
-      WHERE confirmed_ng.lot_id = lots.id
-        AND confirmed_ng.action = 'confirm_ng'
-    )`);
+    conditions.push(
+      `lots.status = ${statusParam} AND ${createCurrentNgConfirmationExistsSql()}`
+    );
   }
 
   if (date) {
@@ -479,7 +479,14 @@ export function assertReportReadyForExport(lot, evidence) {
     throw createHttpError(409, 'ยังไม่มีใบตรวจมิติที่บันทึกสมบูรณ์สำหรับส่งออกรายงาน');
   }
 
-  if (lot.packingInspection?.status !== 'completed') {
+  const packingStatus = lot.packingInspection?.status || '';
+  const packingSkippedForDimensionNg = (
+    lot.status === 'ng' &&
+    Boolean(evidence?.ngConfirmed) &&
+    !packingStatus
+  );
+
+  if (packingStatus !== 'completed' && !packingSkippedForDimensionNg) {
     throw createHttpError(409, 'ยังไม่มีใบตรวจบรรจุที่บันทึกสมบูรณ์สำหรับส่งออกรายงาน');
   }
 
@@ -487,7 +494,10 @@ export function assertReportReadyForExport(lot, evidence) {
     throw createHttpError(409, 'snapshot ใบตรวจมิติไม่พร้อมส่งออกรายงาน');
   }
 
-  if (lot.packingInspection.snapshotInvalid || !hasSavedTopics(lot.packingInspection.resultsData)) {
+  if (
+    packingStatus === 'completed' &&
+    (lot.packingInspection.snapshotInvalid || !hasSavedTopics(lot.packingInspection.resultsData))
+  ) {
     throw createHttpError(409, 'snapshot ใบตรวจบรรจุไม่พร้อมส่งออกรายงาน');
   }
 }

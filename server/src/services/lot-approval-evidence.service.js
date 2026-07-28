@@ -12,6 +12,26 @@ export function mapApprovalEvidenceRow(row) {
   };
 }
 
+export function createCurrentNgConfirmationExistsSql({
+  lotIdExpression = 'lots.id',
+  confirmationAlias = 'confirmed_ng',
+  actionExpression = "'confirm_ng'"
+} = {}) {
+  return `EXISTS (
+    SELECT 1
+    FROM lot_audit_logs ${confirmationAlias}
+    WHERE ${confirmationAlias}.lot_id = ${lotIdExpression}
+      AND ${confirmationAlias}.action = ${actionExpression}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM lot_audit_logs reviewed_ng
+        WHERE reviewed_ng.lot_id = ${confirmationAlias}.lot_id
+          AND reviewed_ng.action = 'review_ng'
+          AND reviewed_ng.id > ${confirmationAlias}.id
+      )
+  )`;
+}
+
 export async function getLotApprovalEvidence(lotId, connection) {
   const { rows } = await connection.query(
     `SELECT
@@ -26,6 +46,16 @@ export async function getLotApprovalEvidence(lotId, connection) {
      LEFT JOIN users u ON u.id = a.changed_by
      WHERE a.lot_id = $1
        AND a.action IN ('approve', 'confirm_ng')
+       AND (
+         a.action = 'approve'
+         OR NOT EXISTS (
+           SELECT 1
+           FROM lot_audit_logs reviewed_ng
+           WHERE reviewed_ng.lot_id = a.lot_id
+             AND reviewed_ng.action = 'review_ng'
+             AND reviewed_ng.id > a.id
+         )
+       )
      ORDER BY a.created_at DESC, a.id DESC`,
     [lotId]
   );

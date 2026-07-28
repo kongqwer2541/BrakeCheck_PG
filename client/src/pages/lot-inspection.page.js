@@ -20,6 +20,10 @@ const defaultSamplingRanges = [
   { min: 1201, max: null, sampleCount: 8, label: '>= 1201' }
 ];
 const defaultInstrumentPrefixes = ['A-01-', 'A-01-', 'A-07-', 'A-01-', 'A-01-'];
+const dimensionFinalResultTopicNames = new Set([
+  'สรุปผลการตรวจ',
+  'final result'
+]);
 
 let activeSamplingRanges = defaultSamplingRanges;
 let activeInstrumentPrefixes = defaultInstrumentPrefixes;
@@ -70,7 +74,7 @@ function escapeHtml(value) {
 
 export function requiresDimensionInspectionNote(piecesData) {
   const topics = Array.isArray(piecesData?.topics) ? piecesData.topics : [];
-  const hasFailResult = topics.some((topic) => (
+  const hasFailResult = Boolean(piecesData?.meta?.ngStop) || topics.some((topic) => (
     Array.isArray(topic?.rows)
     && topic.rows.some((row) => (
       Array.isArray(row?.values)
@@ -98,6 +102,55 @@ export function sortMeasurementInputsByInspectionOrder(inputs = []) {
         || left.originalIndex - right.originalIndex;
     })
     .map(({ input }) => input);
+}
+
+export function getRequiredMissingMeasurementInputs(inputs = [], {
+  ngStopTopicId = '',
+  finalResultTopicKey = ''
+} = {}) {
+  const orderedInputs = sortMeasurementInputsByInspectionOrder(inputs);
+  const topicGroups = [];
+
+  orderedInputs.forEach((input) => {
+    const topicKey = String(input?.dataset?.topicKey || '');
+    let group = topicGroups.find((item) => item.topicKey === topicKey);
+
+    if (!group) {
+      group = { topicKey, inputs: [] };
+      topicGroups.push(group);
+    }
+
+    group.inputs.push(input);
+  });
+
+  const ngTopicIndex = topicGroups.findIndex(
+    (group) => group.topicKey === String(ngStopTopicId || '')
+  );
+
+  return topicGroups.flatMap((group, topicIndex) => {
+    const missingInputs = group.inputs.filter((input) => {
+      const value = String(input?.value || '').trim();
+      return !value || value === '-';
+    });
+
+    if (ngTopicIndex < 0) {
+      return missingInputs;
+    }
+
+    if (
+      topicIndex <= ngTopicIndex
+      || group.topicKey === String(finalResultTopicKey || '')
+    ) {
+      return missingInputs;
+    }
+
+    const hasStartedTopic = group.inputs.some((input) => {
+      const value = String(input?.value || '').trim();
+      return value && value !== '-';
+    });
+
+    return hasStartedTopic ? missingInputs : [];
+  });
 }
 
 function getStatusClass(status) {
@@ -529,6 +582,52 @@ function getSavedMeasurementValue(piecesData, topic, pieceNo, inputIndex) {
   return values[inputIndex] ?? '';
 }
 
+function getDimensionNgStop(piecesData) {
+  const ngStop = piecesData?.meta?.ngStop;
+
+  return ngStop && typeof ngStop === 'object' ? ngStop : null;
+}
+
+function getDimensionOrderedTopics(formConfig = []) {
+  const topics = formConfig
+    .map((topic, originalIndex) => ({ topic, originalIndex }))
+    .filter(({ topic }) => getInputCount(topic) > 0);
+
+  return topics
+    .sort((left, right) => {
+      const leftTypeOrder = left.topic.inputType === 'pass_fail' ? 1 : 0;
+      const rightTypeOrder = right.topic.inputType === 'pass_fail' ? 1 : 0;
+
+      return leftTypeOrder - rightTypeOrder || left.originalIndex - right.originalIndex;
+    })
+    .map(({ topic }) => topic);
+}
+
+function getDimensionFinalResultTopic(formConfig = []) {
+  return getDimensionOrderedTopics(formConfig).find((topic) => {
+    const topicName = String(topic?.topicName || '').trim().toLocaleLowerCase();
+
+    return topic.inputType === 'pass_fail' && (
+      topic.ruleKey === 'final_result'
+      || dimensionFinalResultTopicNames.has(topicName)
+    );
+  }) || null;
+}
+
+function hasDimensionFinalResultFail(formConfig = [], piecesData = null) {
+  const finalResultTopic = getDimensionFinalResultTopic(formConfig);
+
+  if (!finalResultTopic) {
+    return false;
+  }
+
+  const savedTopic = getSavedTopic(piecesData, finalResultTopic);
+
+  return (savedTopic?.rows || []).some((row) => (
+    Array.isArray(row?.values) && row.values.includes('fail')
+  ));
+}
+
 function getSavedPackingTopic(resultsData, topic) {
   const savedTopics = Array.isArray(resultsData?.topics) ? resultsData.topics : [];
   const topicId = String(topic?.id || '');
@@ -544,9 +643,19 @@ function getSavedPackingValue(resultsData, topic) {
   return getSavedPackingTopic(resultsData, topic)?.value || '';
 }
 
-function renderMeasurementControl({ topic, topicIndex, pieceNo, inputIndex, piecesData }) {
+function renderMeasurementControl({
+  topic,
+  topicIndex,
+  pieceNo,
+  inputIndex,
+  piecesData,
+  isFinalResultTopic = false,
+  allowNotInspectedEdit = false
+}) {
   const topicKey = getTopicKey(topic, topicIndex);
-  const value = getSavedMeasurementValue(piecesData, topic, pieceNo, inputIndex);
+  const savedValue = getSavedMeasurementValue(piecesData, topic, pieceNo, inputIndex);
+  const isNotInspected = savedValue === '-';
+  const value = isNotInspected && allowNotInspectedEdit ? '' : savedValue;
   const commonAttributes = `
     data-measurement-input
     data-topic-index="${topicIndex}"
@@ -556,7 +665,23 @@ function renderMeasurementControl({ topic, topicIndex, pieceNo, inputIndex, piec
     data-input-index="${inputIndex}"
     data-decimal-places="${getDecimalPlaces(topic)}"
     data-input-type="${escapeHtml(topic.inputType || 'number')}"
+    ${isFinalResultTopic ? 'data-final-result-topic="true"' : ''}
   `;
+
+  if (isNotInspected && !allowNotInspectedEdit) {
+    return `
+      <span class="dimension-ng-skipped-value">
+        <input
+          ${commonAttributes}
+          type="hidden"
+          value="-"
+          data-not-inspected="true"
+          disabled
+        />
+        ไม่ได้ตรวจ (N/A)
+      </span>
+    `;
+  }
 
   if (topic.inputType === 'pass_fail') {
     return `
@@ -597,7 +722,13 @@ function renderMeasurementControl({ topic, topicIndex, pieceNo, inputIndex, piec
   `;
 }
 
-function renderMeasurementGrid(formConfig = [], sampleCount = 0, piecesData = null, formValues = {}) {
+function renderMeasurementGrid(
+  formConfig = [],
+  sampleCount = 0,
+  piecesData = null,
+  formValues = {},
+  { allowNotInspectedEdit = false } = {}
+) {
   if (!formConfig.length) {
     return `
       <div class="history-state-panel compact-empty-panel">
@@ -623,6 +754,7 @@ function renderMeasurementGrid(formConfig = [], sampleCount = 0, piecesData = nu
 
   const numberTopics = topics.filter(({ topic }) => topic.inputType !== 'pass_fail');
   const passFailTopics = topics.filter(({ topic }) => topic.inputType === 'pass_fail');
+  const finalResultTopic = getDimensionFinalResultTopic(formConfig);
 
   function renderTopicCells(topicItems, pieceNo) {
     return topicItems.map(({ topic, topicIndex, inputCount }) => {
@@ -631,7 +763,17 @@ function renderMeasurementGrid(formConfig = [], sampleCount = 0, piecesData = nu
       }
 
       return Array.from({ length: inputCount }, (_, inputIndex) => (
-        `<td>${renderMeasurementControl({ topic, topicIndex, pieceNo, inputIndex, piecesData })}</td>`
+        `<td>${renderMeasurementControl({
+          topic,
+          topicIndex,
+          pieceNo,
+          inputIndex,
+          piecesData,
+          allowNotInspectedEdit,
+          isFinalResultTopic: Boolean(
+            finalResultTopic && String(finalResultTopic.id) === String(topic.id)
+          )
+        })}</td>`
       )).join('');
     }).join('');
   }
@@ -811,6 +953,56 @@ function renderSamplingRow(lot, formValues = {}) {
   `;
 }
 
+function renderDimensionNgStopPanel(formConfig, piecesData, isDisabled) {
+  const orderedTopics = getDimensionOrderedTopics(formConfig);
+  const finalResultTopic = getDimensionFinalResultTopic(formConfig);
+  const selectableTopics = orderedTopics.filter(
+    (topic) => String(topic.id) !== String(finalResultTopic?.id || '')
+  );
+  const ngStop = getDimensionNgStop(piecesData);
+  const isVisible = hasDimensionFinalResultFail(formConfig, piecesData);
+  const selectedTopicId = isVisible ? String(ngStop?.topicId || '') : '';
+  const isSelectDisabled = isDisabled || !isVisible;
+
+  if (!finalResultTopic || !selectableTopics.length) {
+    return '';
+  }
+
+  return `
+    <div
+      class="dimension-ng-topic-panel"
+      data-dimension-ng-topic-panel
+      ${isVisible ? '' : 'hidden'}
+    >
+      <div class="dimension-ng-topic-copy">
+        <strong>รายละเอียดงาน NG</strong>
+        <span>หัวข้อที่พบ NG ต้องตรวจครบ ส่วนหัวข้อถัดไปตรวจให้ครบทั้งหัวข้อหรือเว้นไว้เป็น N/A</span>
+      </div>
+      <label class="field dimension-ng-topic-field">
+        <span>หัวข้อที่พบ NG</span>
+        <select
+          name="ngStopTopicId"
+          data-dimension-ng-topic
+          ${isDisabled ? 'data-read-only="true"' : ''}
+          ${isSelectDisabled ? 'disabled aria-disabled="true"' : ''}
+        >
+          <option value="">เลือกหัวข้อ</option>
+          ${selectableTopics.map((topic) => `
+            <option
+              value="${escapeHtml(topic.id)}"
+              data-topic-name="${escapeHtml(topic.topicName)}"
+              ${String(topic.id) === selectedTopicId ? 'selected' : ''}
+            >${escapeHtml(topic.topicName)}</option>
+          `).join('')}
+        </select>
+      </label>
+      <span class="dimension-ng-topic-status">
+        ช่องของหัวข้อถัดไปที่เว้นทั้งหัวข้อจะบันทึกเป็นไม่ได้ตรวจ (N/A)
+      </span>
+    </div>
+  `;
+}
+
 function renderDimensionShell({
   lot,
   inspection,
@@ -970,7 +1162,16 @@ function renderDimensionShell({
             <strong>หัวข้อในการตรวจสอบ</strong>
             <span>${formConfig.length ? `${formConfig.length} หัวข้อจาก form_config` : 'รอเพิ่มหัวข้อใน System Settings'}</span>
           </div>
-          ${renderMeasurementGrid(formConfig, activeSampleCount, formValues?.piecesData, formValues)}
+          ${renderMeasurementGrid(
+            formConfig,
+            activeSampleCount,
+            formValues?.piecesData,
+            formValues,
+            {
+              allowNotInspectedEdit: lot?.status === 'need_fix' && !isCompletedReadOnly
+            }
+          )}
+          ${renderDimensionNgStopPanel(formConfig, formValues?.piecesData, completeDisabled)}
         </div>
       </section>
 
@@ -1593,6 +1794,11 @@ export function bindLotInspectionPage({
   const orderedMeasurementInputs = sortMeasurementInputsByInspectionOrder(measurementInputs);
   const missingPanel = form.querySelector('[data-missing-panel]');
   const noteInput = form.querySelector('[name="inspectionNote"]');
+  const ngTopicSelect = form.querySelector('[data-dimension-ng-topic]');
+  const ngTopicPanel = form.querySelector('[data-dimension-ng-topic-panel]');
+  const finalResultInputs = measurementInputs.filter(
+    (input) => input.dataset.finalResultTopic === 'true'
+  );
   let hasShownMissingPanel = false;
 
   instrumentInputs.forEach((input) => {
@@ -1621,6 +1827,11 @@ export function bindLotInspectionPage({
       return true;
     }
 
+    if (value === '-' && input.dataset.notInspected === 'true') {
+      input.setCustomValidity('');
+      return true;
+    }
+
     if (input.dataset.inputType === 'pass_fail') {
       const isValid = ['pass', 'fail'].includes(value);
 
@@ -1644,8 +1855,15 @@ export function bindLotInspectionPage({
   }
 
   function getMissingMeasurementInputs() {
-    return measurementInputs
-      .filter((input) => !String(input.value || '').trim())
+    const ngStopTopicId = hasFinalResultFailInForm()
+      ? String(ngTopicSelect?.value || '').trim()
+      : '';
+    const finalResultTopicKey = String(finalResultInputs[0]?.dataset.topicKey || '');
+
+    return getRequiredMissingMeasurementInputs(measurementInputs, {
+      ngStopTopicId,
+      finalResultTopicKey
+    })
       .map((input) => {
         const inputIndex = Number(input.dataset.inputIndex || 0) + 1;
         const suffix = input.dataset.inputType === 'pass_fail' ? '' : ` ช่องที่ ${inputIndex}`;
@@ -1796,6 +2014,8 @@ export function bindLotInspectionPage({
         optionButton.classList.toggle('fail', optionButton === button && input.value === 'fail');
       });
       validateMeasurementInput(input);
+      syncDimensionNgPanel(input);
+
       if (hasShownMissingPanel) {
         updateMissingPanel(
           getMissingMeasurementInputs(),
@@ -1827,10 +2047,94 @@ export function bindLotInspectionPage({
     return true;
   }
 
+  function hasFinalResultFailInForm() {
+    return finalResultInputs.some((input) => input.value === 'fail');
+  }
+
+  function hasOtherFailInForm() {
+    return measurementInputs.some((input) => (
+      input.dataset.inputType === 'pass_fail'
+      && input.dataset.finalResultTopic !== 'true'
+      && input.value === 'fail'
+    ));
+  }
+
+  function setDimensionNgPanelVisible(isVisible) {
+    if (ngTopicPanel) {
+      ngTopicPanel.hidden = !isVisible;
+    }
+
+    if (!ngTopicSelect) {
+      return;
+    }
+
+    if (!isVisible) {
+      ngTopicSelect.value = '';
+      ngTopicSelect.setCustomValidity('');
+    }
+
+    const isReadOnly = ngTopicSelect.dataset.readOnly === 'true';
+    ngTopicSelect.disabled = !isVisible || isReadOnly;
+    ngTopicSelect.toggleAttribute('aria-disabled', ngTopicSelect.disabled);
+  }
+
+  function syncDimensionNgPanel(changedInput) {
+    if (changedInput?.dataset.finalResultTopic !== 'true') {
+      return;
+    }
+
+    setDimensionNgPanelVisible(hasFinalResultFailInForm());
+  }
+
+  function validateDimensionNgWorkflow() {
+    finalResultInputs.forEach((input) => input.setCustomValidity(''));
+    ngTopicSelect?.setCustomValidity('');
+
+    if (hasOtherFailInForm() && !hasFinalResultFailInForm()) {
+      const target = finalResultInputs[0];
+
+      if (target) {
+        target.setCustomValidity('กรุณาเลือกไม่ผ่านที่หัวข้อสรุปผลการตรวจ');
+        hasShownMissingPanel = true;
+        updateMissingPanel([{
+          input: target,
+          label: 'สรุปผลการตรวจ ต้องเลือกไม่ผ่านเมื่อพบงาน NG'
+        }], requiresDimensionInspectionNote(collectPiecesData()));
+        focusMeasurementTarget(target);
+      }
+
+      return false;
+    }
+
+    if (!hasFinalResultFailInForm()) {
+      return true;
+    }
+
+    const hasSelectedTopic = Boolean(String(ngTopicSelect?.value || '').trim());
+    ngTopicSelect?.setCustomValidity(
+      hasSelectedTopic ? '' : 'กรุณาเลือกหัวข้อที่พบ NG'
+    );
+
+    if (!hasSelectedTopic) {
+      ngTopicSelect?.reportValidity();
+      ngTopicSelect?.focus();
+    }
+
+    return hasSelectedTopic;
+  }
+
   function collectPiecesData() {
     const topicsMap = new Map();
     const formData = new FormData(form);
     const inspectionNote = String(formData.get('inspectionNote') || '').trim();
+    const selectedNgStopTopicId = hasFinalResultFailInForm()
+      ? String(ngTopicSelect?.value || '').trim()
+      : '';
+    const selectedNgStopOption = selectedNgStopTopicId
+      ? Array.from(ngTopicSelect?.options || []).find(
+        (option) => String(option.value) === selectedNgStopTopicId
+      )
+      : null;
 
     measurementInputs.forEach((input) => {
       const topicKey = input.dataset.topicKey;
@@ -1856,10 +2160,17 @@ export function bindLotInspectionPage({
       row.values[inputIndex] = String(input.value || '').trim();
     });
 
+    const meta = { inspectionNote };
+
+    if (selectedNgStopTopicId) {
+      meta.ngStop = {
+        topicId: Number(selectedNgStopTopicId) || selectedNgStopTopicId,
+        topicName: String(selectedNgStopOption?.dataset.topicName || selectedNgStopOption?.textContent || '').trim()
+      };
+    }
+
     return {
-      meta: {
-        inspectionNote
-      },
+      meta,
       topics: Array.from(topicsMap.values()).map((topic) => ({
         ...topic,
         rows: topic.rows.sort((a, b) => a.pieceNo - b.pieceNo)
@@ -1906,6 +2217,17 @@ export function bindLotInspectionPage({
     input.addEventListener('change', refreshMeasurementRules);
   });
 
+  ngTopicSelect?.addEventListener('change', () => {
+    ngTopicSelect.setCustomValidity('');
+
+    if (hasShownMissingPanel) {
+      updateMissingPanel(
+        getMissingMeasurementInputs(),
+        requiresDimensionInspectionNote(collectPiecesData())
+      );
+    }
+  });
+
   form.addEventListener('submit', (event) => {
     event.preventDefault();
 
@@ -1922,6 +2244,10 @@ export function bindLotInspectionPage({
   });
 
   form.querySelector('[data-complete-save]')?.addEventListener('click', () => {
+    if (!validateDimensionNgWorkflow()) {
+      return;
+    }
+
     if (!validateInstrumentSuffixInputs(form)) {
       return;
     }
