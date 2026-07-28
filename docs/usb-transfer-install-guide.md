@@ -1,461 +1,243 @@
-# คู่มือย้าย BrakeCheck ด้วยแฟลชไดรฟ์
+# คู่มือติดตั้ง BrakeCheck จากแฟลชไดรฟ์
 
-คู่มือนี้สำหรับมือใหม่ที่ต้องการย้ายโปรแกรม BrakeCheck จากคอมที่บ้านไปติดตั้งบนคอมบริษัท โดยไม่ใช้ Git เป็นหลัก
+คู่มือนี้ใช้สำหรับนำ BrakeCheck จากเครื่องทดสอบที่บ้านไปติดตั้งใหม่บนเครื่องบริษัท โดยสร้าง PostgreSQL 17 ที่สะอาด
 
-เป้าหมายคือย้ายอย่างปลอดภัย ไม่ทำฐานข้อมูลหาย และไม่เปิดเผยรหัสผ่านหรือข้อมูลจริงเกินจำเป็น
+## หลักสำคัญ
 
-## อ่านตรงนี้ก่อน
+- ไม่ย้ายฐานทดสอบ `brakecheck_pg` จากเครื่องที่บ้านไปเป็นฐานจริง
+- ไม่เชื่อมต่อหรือ Restore ข้อมูลจาก MySQL
+- ไม่คัดลอก `.env`, password, token, log, backup หรือข้อมูลทดสอบ
+- สร้างฐาน `brakecheck_pg` ใหม่บนเครื่องบริษัท
+- เริ่มข้อมูลจริงหลัง IT และผู้ใช้ตรวจ Go-live/UAT ผ่านเท่านั้น
 
-- ไฟล์นี้เป็นคู่มือหลักเฉพาะการย้ายด้วยแฟลชไดรฟ์
-- ถ้าต้องตั้งเครื่องแม่/เครื่องลูก, IP, Firewall หรือ CORS แบบใช้งานจริง ให้ดู `docs/deployment-guide.md`
-- ถ้าต้องกู้ข้อมูลหรือ Restore แบบละเอียด ให้ดู `docs/backup-restore-guide.md`
-- ถ้าต้องใช้ปุ่ม `.bat` เช่น เปิด server หรือ backup ให้ดู `docs/windows-button-guide.md`
-- ถ้าติดปัญหาระหว่างทดสอบ ให้ดู `docs/troubleshooting.md`
-- ตัวโปรแกรม BrakeCheck กับฐานข้อมูล MySQL เป็นคนละส่วน
-- ถ้าต้องการข้อมูลเดิม ต้องย้ายทั้งโฟลเดอร์โปรแกรมและไฟล์ backup ฐานข้อมูล `.sql`
-- ถ้าระบบมีไฟล์แนบ ต้องย้าย backup ของ `storage/attachments` ด้วย
-- ไม่ควรคัดลอกโฟลเดอร์ Data ของ MySQL โดยตรง เพราะเสี่ยงเสียหายและกู้ยาก
-- ห้ามอัปโหลด `.env`, `backups/`, `*.sql`, หรือไฟล์ backup จริงขึ้น GitHub
+## 1. สิ่งที่ควรมีในแฟลชไดรฟ์
 
-คำศัพท์สั้น ๆ:
-
-- โปรแกรม: โฟลเดอร์ BrakeCheck ที่มี `client/`, `server/`, `docs/`, `scripts/`
-- Database: ฐานข้อมูล MySQL ที่เก็บ Lot, ประวัติ, Audit, รายงาน และข้อมูล QC
-- Backup: ไฟล์สำรองข้อมูล เช่น `.sql` สำหรับฐานข้อมูล และ `.zip` สำหรับไฟล์แนบ
-- Restore: การนำไฟล์ backup กลับเข้า MySQL
-
-## ภาพรวมการย้ายระบบ
-
-การย้าย BrakeCheck มี 2 ส่วนหลัก:
-
-1. ย้ายตัวโปรแกรม
-2. ย้ายข้อมูลเดิมจาก MySQL ด้วยไฟล์ backup
-
-ถ้าย้ายเฉพาะโฟลเดอร์โปรแกรม ระบบอาจเปิดได้ แต่จะไม่มีข้อมูลเดิม ถ้าต้องการข้อมูลเดิม ต้องมีไฟล์ backup `.sql` ที่ backup จากคอมที่บ้าน
-
-ถ้ามีไฟล์แนบ เช่น PDF หรือรูปภาพที่แนบกับ Lot ให้ใช้ `scripts/backup-system.bat` เพื่อได้ทั้ง:
-
-- ไฟล์ฐานข้อมูล `.sql`
-- ไฟล์แนบ `.zip` จาก `storage/attachments`
-
-ห้ามคัดลอกโฟลเดอร์ Data ของ MySQL โดยตรง เช่น `C:\ProgramData\MySQL\...` เพราะอาจใช้ไม่ได้กับเครื่องใหม่ และเสี่ยงทำข้อมูลเสีย
-
-## สิ่งที่ต้องเตรียมบนคอมที่บ้าน
-
-เตรียมให้ครบก่อนเสียบแฟลชไดรฟ์:
-
-- โฟลเดอร์โปรแกรม BrakeCheck
-- ไฟล์ backup ฐานข้อมูล `.sql`
-- ไฟล์ backup ไฟล์แนบ `.zip` ถ้ามี
-- ไฟล์ `.env.example`
-- คู่มือใน `docs/`
-- ปุ่มกดใน `scripts/`
-- แฟลชไดรฟ์ที่มีพื้นที่พอ
-
-ไฟล์ `.env` มีรหัสผ่านจริง จึงไม่ควรคัดลอกไปแบบไม่จำเป็น ถ้าจำเป็นต้องดูค่าเดิม ให้เปิดดูเฉพาะบนเครื่องที่ปลอดภัย และอย่าส่งขึ้น GitHub
-
-## สิ่งที่ควรคัดลอกลงแฟลชไดรฟ์
-
-ตัวอย่างโครงสร้างในแฟลชไดรฟ์:
+ชุดติดตั้งควรมี:
 
 ```text
-FlashDrive/
-  BrakeCheck/
-    client/
-    server/
-    docs/
-    scripts/
-    storage/  (โฟลเดอร์ระบบหรือโฟลเดอร์เปล่า)
-    README.md
-    AGENTS.md
-    package.json
-    .env.example
-  database-backup/
-    brakecheck_backup_YYYY-MM-DD_HHMM.sql
-    attachments_backup_YYYY-MM-DD_HHMM.zip
-  notes/
-    install-note.txt
+BrakeCheck_Deployment_YYYY-MM-DD/
+  app/
+  database-clean/
+    schema.sql
+  docs/
+  installers/
+  checksums/
 ```
 
-หมายเหตุ:
+ตรวจว่ามีอย่างน้อย:
 
-- `database-backup/` เป็นโฟลเดอร์แยกบนแฟลชไดรฟ์ ไม่ใช่โฟลเดอร์ที่จะ commit
-- ชื่อไฟล์ backup จริงอาจต่างจากตัวอย่าง ให้ดูวันที่และเวลาที่ backup
-- ถ้าไม่มีไฟล์แนบ อาจไม่มีไฟล์ `attachments_backup_...zip`
-- ถ้า `storage/attachments` มีไฟล์จริง ให้ย้ายด้วยไฟล์ `attachments_backup_...zip` และเก็บแฟลชไดรฟ์ให้ปลอดภัย
+- source โปรแกรม BrakeCheck
+- PostgreSQL 17 installer
+- Node.js LTS installer
+- `database-clean/schema.sql`
+- `.env.example`
+- คู่มือติดตั้งและ Go-live checklist
+- checksum สำหรับตรวจว่าไฟล์ไม่เสีย
 
-## สิ่งที่ต้องระวังไม่ให้หลุด
+ห้ามมี:
 
-ไฟล์เหล่านี้อาจมีข้อมูลจริงหรือรหัสผ่าน:
+- `.env`
+- `node_modules/`
+- `backups/`
+- log
+- `storage/attachments` จากเครื่องทดสอบ
+- database backup หรือข้อมูลโรงงานจริง
 
-- `.env` มีรหัสผ่านฐานข้อมูลและ `SESSION_SECRET`
-- `backups/` มีไฟล์ backup จริง
-- `*.sql` มีข้อมูลฐานข้อมูลจริง
-- `attachments_backup_...zip` อาจมีไฟล์แนบจริงของ Lot
+## 2. ก่อนเสียบแฟลชไดรฟ์กับคอมบริษัท
 
-ข้อควรทำ:
+1. ให้ IT ตรวจแฟลชไดรฟ์ด้วยระบบป้องกันไวรัสของบริษัท
+2. ให้ IT ยืนยันโฟลเดอร์ติดตั้ง เช่น `C:\BrakeCheck_PG`
+3. ให้ IT ยืนยัน IP เครื่องแม่และ port `3000`
+4. ให้ IT เป็นผู้กำหนดรหัส PostgreSQL และผู้รับผิดชอบ backup
+5. ห้ามเปิดโปรแกรมจากแฟลชไดรฟ์โดยตรง
 
-- เก็บแฟลชไดรฟ์ให้ปลอดภัย
-- ไม่ส่งไฟล์ backup ให้คนที่ไม่เกี่ยวข้อง
-- ไม่อัปโหลด `.env`, `backups/`, `*.sql`, หรือ backup `.zip` ขึ้น GitHub
-- ถ้าต้องส่งให้ IT ให้ส่งผ่านช่องทางที่บริษัทอนุญาต
+## 3. คัดลอกโปรแกรมลงเครื่องบริษัท
 
-## วิธี Backup ฐานข้อมูลจากคอมที่บ้าน
-
-วิธีที่แนะนำที่สุดคือ backup ทั้งระบบ:
+1. สร้างโฟลเดอร์ที่ IT อนุมัติ เช่น:
 
 ```text
-scripts/backup-system.bat
+C:\BrakeCheck_PG
 ```
 
-ปุ่มนี้จะ backup:
+2. แตกไฟล์โปรแกรมจาก `app/` ลงโฟลเดอร์นี้
+3. ตรวจว่ามี `client/`, `server/`, `scripts/`, `docs/` และ `.env.example`
+4. เก็บแฟลชไดรฟ์ไว้เป็นชุดติดตั้ง ห้ามใช้เป็นที่รันระบบหรือที่เก็บ backup ประจำ
 
-- MySQL database เป็นไฟล์ `.sql`
-- `storage/attachments` เป็นไฟล์ `.zip`
+## 4. ติดตั้งโปรแกรมพื้นฐาน
 
-ถ้าต้องการ backup เฉพาะฐานข้อมูล:
+ให้ IT ติดตั้ง:
 
-```text
-scripts/backup-database.bat
-```
-
-ถ้าในอนาคตมีไฟล์ `scripts/auto-backup-database.bat` ในโปรเจกต์รุ่นนั้น ให้ใช้ตามคู่มือของรุ่นนั้นได้ แต่ใน repo ปัจจุบันให้ใช้ `backup-system.bat` หรือ `backup-database.bat` เป็นหลัก
-
-หลัง backup เสร็จ ให้ตรวจ:
-
-- มีไฟล์ `.sql` จริง
-- ขนาดไฟล์ไม่ใช่ `0 KB`
-- ถ้ามีไฟล์แนบ ให้มีไฟล์ `.zip` จริง
-- จดวันที่และเวลาที่ backup
-- ถ้ามี External Harddisk ให้เก็บสำเนาอีกชุดไว้ด้วย
-
-ถ้าระบบถามรหัสผ่าน MySQL ให้กรอกรหัสของเครื่องนั้น แต่ห้ามจดรหัสผ่านจริงลงในคู่มือนี้หรือไฟล์ note ที่จะส่งต่อ
-
-## สิ่งที่ต้องเตรียมบนคอมบริษัท
-
-รายละเอียดการตั้งเครื่องแม่/เครื่องลูกและ network แบบเต็มอยู่ใน `docs/deployment-guide.md`
-
-คอมบริษัทที่จะเป็นเครื่องแม่ควรมี:
-
+- Node.js LTS
+- PostgreSQL 17
 - Chrome
-- Node.js
-- MySQL
-- VS Code ถ้าต้องใช้เปิดดูหรือแก้ไฟล์
-- สิทธิ์ติดตั้งโปรแกรม หรือให้ IT ช่วยติดตั้ง
-- สิทธิ์เปิด port `3000` ถ้าจะให้เครื่องอื่นเข้าใช้งาน
-- พื้นที่เก็บ backup
-- เครื่องควรเปิดใช้งานประจำ เพราะถ้าเครื่องแม่ปิด เครื่องลูกจะเข้าไม่ได้
 
-เครื่องลูกเครื่องอื่น ๆ ไม่ต้องติดตั้ง BrakeCheck ทั้งชุด แค่มี Chrome และอยู่ใน network เดียวกับเครื่องแม่
-
-## วิธีคัดลอกโปรแกรมลงคอมบริษัท
-
-แนะนำวางโปรแกรมไว้ที่:
-
-```text
-C:\BrakeCheck\
-```
-
-หรือ:
-
-```text
-D:\BrakeCheck\
-```
-
-ไม่แนะนำวางไว้บน Desktop เพราะย้ายยากและเสี่ยงถูกลบง่าย
-
-ถ้าเครื่องบริษัทเคยติดตั้ง BrakeCheck แล้ว:
-
-- ห้ามคัดลอกทับ `.env` เดิม
-- ห้ามคัดลอกทับ `backups/`
-- ห้ามลบโฟลเดอร์เก่าทันที
-
-ถ้าเป็นการอัปเดตเวอร์ชันใหม่ ให้แยกโฟลเดอร์ก่อน เช่น:
-
-```text
-C:\BrakeCheck_old\
-C:\BrakeCheck_new\
-```
-
-ทดสอบโฟลเดอร์ใหม่ให้ผ่านก่อน แล้วค่อยตัดสินใจใช้งานจริง
-
-## วิธีติดตั้ง package
-
-Package คือไฟล์ library ที่ Node.js ใช้รันระบบ
-
-ถ้ามี internet บนคอมบริษัท ให้เปิด PowerShell แล้วรัน:
+ตรวจใน PowerShell:
 
 ```powershell
-cd C:\BrakeCheck\server
-npm install
+node --version
+npm --version
+Get-Service | Where-Object { $_.Name -like "postgresql*" } | Select-Object Name, Status, StartType
 ```
 
-หรือรันจาก root ของโปรเจกต์:
+PostgreSQL service ควรเป็น `Running` และ `Automatic`
+
+## 5. ติดตั้ง Node.js packages
+
+เปิด PowerShell ที่โฟลเดอร์โปรเจกต์:
 
 ```powershell
-cd C:\BrakeCheck
-npm install --prefix server
+cd C:\BrakeCheck_PG
+npm ci --prefix server
 ```
 
-เมื่อติดตั้งสำเร็จ จะมีโฟลเดอร์ `server\node_modules`
+ถ้าเครื่องบริษัทไม่มี internet ให้ IT เตรียมวิธีติดตั้ง package ที่บริษัทอนุมัติ ห้ามคัดลอก `node_modules` จากเครื่องอื่นโดยไม่ตรวจสอบ
 
-ถ้าคอมบริษัทไม่มี internet อาจต้องเตรียม dependency ล่วงหน้า หรือให้ IT ช่วยติดตั้งจากเครื่องที่มี internet
+## 6. สร้าง PostgreSQL ใหม่ที่สะอาด
 
-อย่าแก้ `package.json` หรือเพิ่ม dependency ใหม่เองถ้ายังไม่ได้รับอนุมัติ
+ใช้ pgAdmin 4 และเชื่อมต่อด้วยบัญชีผู้ดูแล PostgreSQL:
 
-## วิธีตั้งค่า `.env`
+1. สร้าง Login/Group Role ชื่อ `brakecheck_app`
+2. เปิดสิทธิ์ `Can login`
+3. ตั้งรหัสผ่านใหม่ของเครื่องบริษัท
+4. ไม่ให้ role นี้เป็น Superuser
+5. สร้าง database ชื่อ `brakecheck_pg`
+6. ให้ผู้ดูแล PostgreSQL เป็น owner ของ database ระหว่างลง schema
 
-โปรเจกต์นี้ใช้ไฟล์ `.env` ที่ root ของโปรเจกต์ เช่น:
+ข้อควรระวัง:
+
+- ห้ามใช้ฐานทดสอบจากเครื่องที่บ้าน
+- ห้าม Restore เข้า `brakecheck_pg` สำหรับการติดตั้งใหม่
+- ห้ามใช้ `brakecheck_app` เป็นผู้รัน schema
+
+## 7. ลง schema 14 ตาราง
+
+1. ใน pgAdmin เลือก database `brakecheck_pg`
+2. เปิด Query Tool ด้วยบัญชีผู้ดูแล PostgreSQL
+3. เปิดไฟล์ `database-clean/schema.sql` หรือ `server/src/database/schema.sql`
+4. ตรวจว่าหัว Query Tool แสดง database `brakecheck_pg`
+5. กด Execute
+6. Refresh `Schemas > public > Tables`
+
+ผ่านเมื่อเห็น 14 ตารางและไม่มี error
+
+Schema จะให้สิทธิ์ runtime ที่จำเป็นแก่ `brakecheck_app` โดยไม่ให้สิทธิ์แก้ schema
+
+## 8. สร้าง `.env` ของบริษัท
+
+1. คัดลอก `.env.example` เป็น `.env`
+2. แก้ค่าบนเครื่องบริษัทเท่านั้น
+3. ใช้ค่ารูปแบบนี้ โดยแทน placeholder ด้วยค่าจริงของบริษัท:
 
 ```text
-C:\BrakeCheck\.env
-```
-
-ให้คัดลอกจากไฟล์ตัวอย่าง:
-
-```powershell
-copy .env.example .env
-```
-
-จากนั้นเปิด `.env` แล้วใส่ค่าของเครื่องบริษัท เช่น:
-
-```text
+APP_NAME=BrakeCheck
+APP_PORT=3000
+CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://<server-ip>:3000
 DB_HOST=localhost
-DB_PORT=3306
-DB_NAME=brakecheck
-DB_USER=ชื่อ_user_mysql
-DB_PASSWORD=กรอกในไฟล์จริงเท่านั้น_ห้ามใส่ในเอกสาร
-SESSION_SECRET=ข้อความสุ่มยาวอย่างน้อย_32_ตัวอักษร
+DB_PORT=5432
+DB_NAME=brakecheck_pg
+DB_USER=brakecheck_app
+DB_PASSWORD=<company-postgresql-password>
+SESSION_SECRET=<random-text-at-least-32-characters>
 ```
 
-ข้อควรระวัง:
+ห้ามส่ง `.env` ในแชต ห้ามคัดลอกกลับไปแฟลชไดรฟ์ และห้าม commit
 
-- ห้ามใช้รหัสผ่านจริงในเอกสาร
-- ห้ามส่งไฟล์ `.env` ขึ้น GitHub
-- ถ้าเครื่องบริษัทเคยมี `.env` อยู่แล้ว ห้ามทับทันที ให้ backup หรือให้ IT ตรวจ
-- ถ้าไม่รู้ค่า MySQL ให้ถาม IT หรือคนที่ติดตั้ง MySQL
-
-## วิธีสร้างฐานข้อมูลบนคอมบริษัท
-
-MySQL ต้องมี database ที่ BrakeCheck ใช้ เช่น:
-
-```sql
-CREATE DATABASE brakecheck
-CHARACTER SET utf8mb4
-COLLATE utf8mb4_unicode_ci;
-```
-
-เหตุผลที่ใช้ `utf8mb4` คือรองรับภาษาไทยและตัวอักษรพิเศษได้ดีกว่า
-
-ข้อห้ามสำคัญ:
-
-- ห้าม `DROP DATABASE` ถ้ามีข้อมูลจริงอยู่แล้ว
-- ห้าม reset database ถ้ายังไม่แน่ใจว่าเป็นฐานข้อมูลทดสอบหรือฐานข้อมูลจริง
-- ห้าม restore ทับ database จริงถ้ายังไม่ได้ backup สภาพปัจจุบัน
-
-ถ้าไม่มั่นใจ ให้ให้ IT ช่วยสร้าง database และ user ให้ตรงกับค่าใน `.env`
-
-## วิธี Restore ฐานข้อมูลจากไฟล์ `.sql`
-
-Restore คือการเอาข้อมูลจากไฟล์ backup เข้า MySQL เครื่องบริษัท
-
-ขั้นตอน Restore แบบละเอียดและปลอดภัยให้ใช้ `docs/backup-restore-guide.md` เป็นไฟล์หลัก หัวข้อนี้เป็นเพียงสรุปสำหรับงานย้ายด้วยแฟลชไดรฟ์
-
-ก่อน restore ให้ตรวจ:
-
-- ไฟล์ `.sql` ถูกตัว
-- database เป้าหมายถูกตัว
-- backup สภาพปัจจุบันของเครื่องบริษัทแล้ว ถ้าเคยมีข้อมูลเดิม
-- ไม่มีผู้ใช้กำลังใช้งานระบบ
-
-แนะนำให้ restore ลงฐานข้อมูลทดสอบก่อน ถ้าเป็นไปได้ เช่น:
-
-```sql
-CREATE DATABASE brakecheck_restore_test
-CHARACTER SET utf8mb4
-COLLATE utf8mb4_unicode_ci;
-```
-
-ตัวอย่างรูปแบบคำสั่ง restore:
-
-```text
-"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -h localhost -P 3306 -u ชื่อ_user_mysql -p brakecheck < "D:\database-backup\ชื่อไฟล์_backup.sql"
-```
-
-หลังรันคำสั่ง MySQL จะถาม password ให้กรอกรหัสผ่านของเครื่องบริษัท
-
-ข้อควรระวัง:
-
-- อย่าใส่รหัสผ่านจริงในคำสั่งหรือเอกสาร
-- ถ้า restore เข้า test database ไม่ผ่าน ห้าม restore เข้า database จริง
-- Restore อาจเขียนทับข้อมูลเดิม ถ้าใช้ database ผิดตัว
-- ไม่ต้องคัดลอกโฟลเดอร์ MySQL Data โดยตรง
-
-ถ้ามีไฟล์แนบ `.zip` ให้ดู `docs/backup-restore-guide.md` เพิ่มเติมก่อน restore ไฟล์แนบกลับเข้า `storage\attachments`
-
-## วิธีเปิดระบบบนคอมบริษัท
-
-รายละเอียดปุ่มกดอยู่ใน `docs/windows-button-guide.md`
-
-ถ้ามีปุ่มกด ให้ใช้:
-
-```text
-scripts/start-server.bat
-```
-
-ถ้าจำเป็นต้องใช้คำสั่งแทนปุ่มกด:
+สร้าง `SESSION_SECRET` ใน PowerShell ได้ด้วย:
 
 ```powershell
-cd C:\BrakeCheck\server
-npm start
+[guid]::NewGuid().ToString("N") + [guid]::NewGuid().ToString("N")
 ```
 
-เมื่อ server เปิดแล้ว ให้เปิด Chrome:
+## 9. สร้าง Admin คนแรก
+
+เปิด PowerShell ที่โฟลเดอร์โปรเจกต์:
+
+```powershell
+$secureAdminPassword = Read-Host "รหัสผ่านชั่วคราวของ Admin" -AsSecureString
+$env:ADMIN_PASSWORD = [System.Net.NetworkCredential]::new("", $secureAdminPassword).Password
+npm run create-admin --prefix server
+Remove-Item Env:ADMIN_PASSWORD -ErrorAction SilentlyContinue
+Remove-Variable secureAdminPassword -ErrorAction SilentlyContinue
+```
+
+ระบบสร้าง user `admin` role `head` และบังคับเปลี่ยนรหัสผ่านเมื่อ Login ครั้งแรก
+
+ถ้าต้องการเปลี่ยนรหัสพนักงานหรือชื่อ Admin ให้ IT ตั้ง environment ชั่วคราวตาม `server/src/scripts/create-admin.js` โดยห้ามเขียน password ลงไฟล์ script
+
+## 10. ตรวจระบบและเปิด Server
+
+รัน:
+
+```text
+scripts\check-system.bat
+scripts\start-server.bat
+```
+
+เปิด:
 
 ```text
 http://localhost:3000/
-```
-
-ตรวจ backend:
-
-```text
 http://localhost:3000/api/health
-```
-
-ตรวจ database:
-
-```text
 http://localhost:3000/api/database/health
 ```
 
-ถ้า database health fail ให้ตรวจ MySQL, `.env`, ชื่อ database, user และ password
+Database health ผ่านเมื่อ:
 
-## วิธีให้เครื่องอื่นเข้าใช้งาน
+- engine เป็น PostgreSQL
+- database เป็น `brakecheck_pg`
+- schema พร้อม
+- พบตารางครบ 14 ตาราง
 
-รายละเอียดเครื่องแม่/เครื่องลูก, IP, Firewall และ CORS อยู่ใน `docs/deployment-guide.md`
+## 11. ตั้งค่าระบบเริ่มต้น
 
-สรุปสั้น:
+หลัง Admin เปลี่ยนรหัสผ่านแล้ว:
 
-1. ที่เครื่องแม่ เปิด PowerShell หรือ Command Prompt แล้วรัน:
+1. เพิ่มผู้ใช้ตาม role จริง
+2. ตั้งหัวข้อตรวจมิติ
+3. ตั้งหัวข้อตรวจบรรจุ
+4. ตั้งจำนวนสุ่มตรวจ
+5. ตั้งรหัสเครื่องมือวัด
+6. ใช้ข้อมูลทดสอบที่ IT อนุมัติทดสอบ workflow
 
-```powershell
-ipconfig
-```
+ยังไม่ควรนำข้อมูลจริงเข้า จนกว่า Go-live checklist ผ่าน
 
-2. หา IPv4 Address เช่น:
+## 12. ทดสอบก่อนเปิดใช้งานจริง
 
-```text
-192.168.1.50
-```
+ใช้ `docs/go-live-checklist.md` และตรวจอย่างน้อย:
 
-3. เครื่องอื่นให้เปิด Chrome แล้วเข้า:
+- Login/Logout/เปลี่ยนรหัสผ่าน
+- role และ permission
+- Import Excel/Manual Lot
+- ตรวจมิติ/ตรวจบรรจุ
+- Approved/NG/Cancel Approval
+- Results/Summary/Export
+- Audit และ Snapshot
+- Backup ทั้ง database และ attachments
+- Restore ลง test database ชื่อใหม่
+- เครื่องลูกเปิดผ่าน `http://<server-ip>:3000/`
 
-```text
-http://IP-เครื่องแม่:3000/
-```
+## 13. Backup หลังเริ่มใช้งาน
 
-ตัวอย่าง:
+- ใช้ `scripts/backup-system.bat` สำหรับ full backup
+- ชุด backup ต้องมี `database.backup`, `attachments.zip`, `backup-info.txt`
+- เก็บสำเนาสำคัญนอกเครื่องแม่ตามที่บริษัทอนุมัติ
+- ตั้ง Auto Backup หลัง IT ยืนยันเวลา, account และที่เก็บ
+- ระบบไม่ลบ backup เก่าอัตโนมัติจนกว่าจะมี retention policy
 
-```text
-http://192.168.1.50:3000/
-```
+Restore ต้องทำแบบ Manual ตาม `docs/backup-restore-guide.md` และต้องซ้อมกับ test database ก่อนเสมอ
 
-ถ้าเข้าไม่ได้ ให้ตรวจ:
+## 14. เกณฑ์หยุดและถาม IT
 
-- เครื่องแม่เปิด server อยู่หรือไม่
-- เครื่องลูกอยู่ network เดียวกันหรือไม่
-- Windows Firewall เปิดให้เข้า port `3000` หรือไม่
-- ค่า `CORS_ORIGINS` ใน `.env` มี URL เครื่องแม่หรือไม่
-- ให้ IT ช่วยตรวจ IP และ network
+หยุดติดตั้งเมื่อ:
 
-## วิธีทดสอบหลังย้ายเสร็จ
+- ไม่แน่ใจว่ากำลังใช้ database ใด
+- schema ไม่ครบ 14 ตาราง
+- `.env` ใช้ `DB_USER=postgres`
+- Database health ไม่ผ่าน
+- ต้องเปิด firewall แต่ยังไม่ได้รับอนุมัติ
+- ต้อง Restore หรือใช้ข้อมูลจริง
+- พบไฟล์ลับหรือข้อมูลทดสอบติดมากับแฟลชไดรฟ์
 
-Checklist หลังย้าย:
+## สรุป
 
-- เปิดเว็บได้
-- API health ผ่าน
-- Database health ผ่าน
-- Login ได้
-- เห็นข้อมูลเดิม
-- Import Excel ได้
-- ค้นหา Lot ได้
-- Backup จากคอมบริษัทได้
-- เครื่องอื่นเข้าใช้งานได้
-- ถ้ามีไฟล์แนบ ให้ลองเปิด Lot ที่มีไฟล์แนบ
-
-ถ้าข้อใดไม่ผ่าน อย่า reset database ทันที ให้จด error และตรวจทีละจุด
-
-## วิธีอัปเดตโปรแกรมในอนาคตด้วยแฟลชไดรฟ์
-
-ก่อนอัปเดตทุกครั้ง:
-
-- Backup ฐานข้อมูลบริษัทก่อนเสมอ
-- ถ้ามีไฟล์แนบ ให้ backup ทั้งระบบด้วย `scripts/backup-system.bat`
-- ปิด server ก่อนคัดลอกไฟล์
-- ห้ามทับ `.env` เดิม
-- ห้ามทับ `backups/`
-- แนะนำวางเป็นโฟลเดอร์ใหม่ก่อน
-- ทดสอบก่อนค่อยใช้งานจริง
-- เก็บโฟลเดอร์เก่าไว้ก่อน อย่าเพิ่งลบ
-
-ตัวอย่าง:
-
-```text
-C:\BrakeCheck_old\
-C:\BrakeCheck_new\
-```
-
-ถ้าเวอร์ชันใหม่ต้องเปลี่ยน database schema ให้หยุดอ่าน `docs/database-migration-guide.md` และ backup ก่อนเสมอ
-
-## ปัญหาที่พบบ่อยและวิธีแก้
-
-ปัญหาแบบละเอียดให้ดู `docs/troubleshooting.md` หัวข้อนี้เป็นสรุปเฉพาะตอนย้ายด้วยแฟลชไดรฟ์
-
-| ปัญหา | สาเหตุที่เป็นไปได้ | วิธีตรวจหรือแก้เบื้องต้น |
-| --- | --- | --- |
-| เปิดเว็บไม่ได้ | Server ยังไม่เปิด หรือ URL ผิด | เปิด `scripts/start-server.bat` แล้วเข้า `http://localhost:3000/` |
-| Database health fail | MySQL ไม่เปิด หรือ `.env` ผิด | ตรวจ `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` |
-| `npm install` ไม่ผ่าน | ไม่มี internet หรือ Node.js ไม่พร้อม | ตรวจ Node.js, เปิด internet, หรือให้ IT ช่วยเตรียม dependency |
-| MySQL เข้าไม่ได้ | รหัสผ่านผิด หรือ user ไม่มีสิทธิ์ | ให้ IT ตรวจ user/password และสิทธิ์ database |
-| Restore ไม่ได้ | ไฟล์ `.sql` ผิด, path ผิด, user ไม่มีสิทธิ์ | ลอง restore ลง test database ก่อน ห้ามทับของจริงทันที |
-| เครื่องอื่นเข้าเว็บไม่ได้ | Firewall หรือ network บล็อก | ใช้ IP เครื่องแม่ ตรวจ port `3000` และถาม IT |
-| port `3000` ถูกใช้งานอยู่ | มี server ตัวเก่าหรือโปรแกรมอื่นเปิดอยู่ | ปิด server ตัวเก่าก่อน หรือให้ IT ตรวจ process |
-| ลืมรหัส MySQL | ไม่มีรหัส database | ถาม IT หรือคนที่ติดตั้ง MySQL ห้ามเดาสุ่มจนล็อกระบบ |
-| หาไฟล์ `.env` ไม่เจอ | ยังไม่ได้สร้างจาก `.env.example` | คัดลอก `.env.example` เป็น `.env` ที่ root ของโปรเจกต์ |
-
-## Checklist ก่อนย้ายจริง
-
-- Backup แล้ว
-- มีไฟล์ `.sql` แล้ว
-- มีไฟล์ backup ไฟล์แนบ `.zip` ถ้ามีไฟล์แนบ
-- มีโฟลเดอร์โปรแกรมครบ
-- มี `.env.example`
-- มี Node.js และ MySQL บนคอมบริษัท
-- คุยกับ IT แล้ว
-- แฟลชไดรฟ์ปลอดภัย
-- รู้ว่าเครื่องไหนเป็นเครื่องแม่
-- รู้ว่าจะเก็บ backup ระยะยาวไว้ที่ไหน
-
-## Checklist หลังย้ายเสร็จ
-
-- เปิดระบบได้
-- Login ได้
-- ข้อมูลเดิมอยู่
-- Health ผ่าน
-- Backup ใหม่จากคอมบริษัทได้
-- เครื่องอื่นเข้าได้
-- ไฟล์แนบเปิดได้ ถ้ามี
-- เก็บแฟลชไดรฟ์และไฟล์ backup ให้ปลอดภัย
-
-## สรุปสั้นมาก
-
-1. ที่คอมบ้าน ให้ backup ด้วย `scripts/backup-system.bat`
-2. คัดลอกโฟลเดอร์ BrakeCheck และไฟล์ backup ลงแฟลชไดรฟ์
-3. ที่คอมบริษัท วางโปรแกรมที่ `C:\BrakeCheck\` หรือ `D:\BrakeCheck\`
-4. ติดตั้ง Node.js, MySQL และ package ด้วย `npm install`
-5. สร้าง `.env` จาก `.env.example` และใส่ค่าของเครื่องบริษัท
-6. สร้าง database และ restore จากไฟล์ `.sql`
-7. เปิด server ด้วย `scripts/start-server.bat`
-8. ทดสอบเว็บ, health, login, ข้อมูลเดิม, backup และเครื่องลูก
-
-จำไว้: ถ้าต้องการข้อมูลเดิม ต้องย้ายไฟล์ backup `.sql` ด้วย และไม่ควรคัดลอกโฟลเดอร์ MySQL Data โดยตรง
+การติดตั้งครั้งนี้คือสร้าง PostgreSQL 17 ใหม่ที่สะอาดบนเครื่องบริษัท ไม่ใช่การย้ายฐาน MySQL หรือฐานทดสอบจากบ้าน หลังติดตั้งต้องผ่าน Go-live/UAT ก่อนเริ่มเก็บข้อมูลจริง

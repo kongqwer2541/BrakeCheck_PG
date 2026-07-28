@@ -7,7 +7,7 @@
 - Chrome: ใช้เปิดหน้าเว็บ BrakeCheck
 - VS Code: โปรแกรมสำหรับเปิดโฟลเดอร์โปรเจกต์และแก้ไฟล์
 - Node.js: ใช้รัน backend server
-- MySQL: ฐานข้อมูลของระบบ
+- PostgreSQL 17: ฐานข้อมูลของระบบ
 - Git: ใช้ดูสถานะงานและทำ branch/commit
 
 ## VS Code คืออะไร
@@ -56,9 +56,9 @@ copy .env.example .env
 APP_NAME=BrakeCheck
 APP_PORT=3000
 DB_HOST=localhost
-DB_PORT=3306
-DB_NAME=brakecheck
-DB_USER=root
+DB_PORT=5432
+DB_NAME=brakecheck_pg
+DB_USER=brakecheck_app
 DB_PASSWORD=change_me
 SESSION_SECRET=replace_with_random_text_at_least_32_chars
 ```
@@ -140,4 +140,4 @@ http://localhost:3000/api/health
 http://localhost:3000/api/database/health
 ```
 
-ถ้าไม่ผ่าน ให้ตรวจว่า MySQL เปิดอยู่ และค่า `.env` ถูกต้อง
+ถ้าไม่ผ่าน ให้ตรวจว่า PostgreSQL 17 เปิดอยู่ ฐาน `brakecheck_pg` มีครบ 14 ตาราง และค่า `.env` ถูกต้อง

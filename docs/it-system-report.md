@@ -4,9 +4,9 @@
 
 วันที่จัดทำครั้งแรก: 2026-07-01
 
-วันที่ตรวจสอบล่าสุด: 2026-07-11
+วันที่ตรวจสอบล่าสุด: 2026-07-28
 
-Revision นี้อ้างอิงโค้ดบน `master` ถึง commit `2dc643f` โดยเพิ่มข้อมูล session revocation, security hardening, โครงสร้าง helper ที่แยกใหม่ และพฤติกรรม Import Excel ปัจจุบัน
+Revision นี้อ้างอิง source truth บน branch `codex/phase-11-final-it-docs` ซึ่งแยกจาก `main` commit `59f8df8` และรวมสถานะ PostgreSQL, Session/Permission, Summary, Backup/Restore และชุดติดตั้งสะอาดปัจจุบัน
 
 ขอบเขตของรายงาน:
 
@@ -14,6 +14,13 @@ Revision นี้อ้างอิงโค้ดบน `master` ถึง com
 - ไม่อ่านหรือคัดลอกค่า `.env` จริง
 - ไม่ใส่รหัสผ่านจริง token secret ไฟล์ backup จริง หรือข้อมูลโรงงานจริง
 - ไม่แก้ logic ระบบ ไม่แก้ฐานข้อมูล และไม่เพิ่ม dependency
+
+สถานะการใช้งาน:
+
+- ระบบทำงานกับ PostgreSQL 17 และผ่านการทดสอบบนเครื่องที่บ้าน
+- ไม่มีข้อมูล production จาก MySQL ที่ต้องย้าย
+- ชุดติดตั้งสะอาดเตรียมไว้สำหรับเครื่องบริษัท
+- ยังไม่ถือว่า production live จนกว่า IT ติดตั้งและผู้ใช้ UAT บนเครื่องบริษัทผ่าน
 
 ## 1. ภาพรวมระบบ
 
@@ -35,6 +42,7 @@ BrakeCheck เป็น web application สำหรับเจ้าหน้�
 - อนุมัติ ยกเลิกอนุมัติ ส่งกลับแก้ไข รับทราบ NG
 - ดูประวัติและผลตรวจย้อนหลัง
 - Export รายงานราย Lot และ Export Dimension History
+- ดู Summary แนวโน้มคุณภาพ, หัวข้อ NG และรุ่นที่พบ NG โดยไม่แสดงข้อมูลรายบุคคล
 
 Local-first หมายถึง ระบบออกแบบให้ทำงานบนเครื่องแม่ในบริษัทหรือเครือข่ายภายในเป็นหลัก ไม่ต้องพึ่ง cloud หรือบริการเสียเงินรายเดือน เครื่องลูกเปิดใช้งานผ่าน Chrome โดยเข้า URL ของเครื่องแม่
 
@@ -44,7 +52,7 @@ Local-first หมายถึง ระบบออกแบบให้ทำ�
 | --- | --- | --- |
 | Frontend | HTML, CSS, JavaScript | สร้างหน้าจอที่เปิดผ่าน Chrome |
 | Backend | Node.js, Express | เปิด web server และ API |
-| Database | MySQL | เก็บข้อมูลผู้ใช้ Lot ผลตรวจ audit และ settings |
+| Database | PostgreSQL 17 | เก็บข้อมูลผู้ใช้ Lot ผลตรวจ audit และ settings |
 | File storage | local folder `storage/` | เก็บไฟล์ upload/export/attachment runtime |
 | Development tools | VS Code, Git, GitHub, Chrome | พัฒนา ตรวจ version และทดสอบ |
 | Windows helper | `.bat`, PowerShell | ปุ่มเปิด server ตรวจระบบ backup และตั้ง task |
@@ -54,7 +62,8 @@ Dependency หลักจาก `server/package.json` และ license จา�
 | Dependency | Version ใน lock | License | ใช้ทำอะไร |
 | --- | --- | --- | --- |
 | `express` | 4.22.2 | MIT | สร้าง HTTP server และ API routes |
-| `mysql2` | 3.22.4 | MIT | เชื่อมต่อ MySQL แบบ promise |
+| `pg` | 8.22.0 | MIT | เชื่อมต่อ PostgreSQL |
+| `mysql2` | 3.22.4 | MIT | dependency เดิมที่ยังอยู่ชั่วคราวเพื่อ compatibility; runtime services ปัจจุบันไม่ใช้เป็นฐานหลัก |
 | `dotenv` | 16.6.1 | BSD-2-Clause | อ่านค่า config จาก `.env` |
 | `cors` | 2.8.6 | MIT | จำกัด origin ที่ browser เรียก API ได้ |
 | `bcrypt` | 6.0.0 | MIT | hash และตรวจรหัสผ่าน |
@@ -95,7 +104,7 @@ Dependency หลักจาก `server/package.json` และ license จา�
 | `server/src/services/dimension-inspection-validation.js` | validation helper ของการตรวจมิติ |
 | `server/src/middlewares/` | auth, role, error handling |
 | `server/src/config/env.js` | อ่านค่า `.env` จาก root project |
-| `server/src/config/database.js` | สร้าง MySQL connection pool |
+| `server/src/config/database.js` | สร้าง PostgreSQL pool; ยังมี legacy MySQL pool ที่ runtime services ไม่ได้เรียกใช้ |
 | `server/src/database/schema.sql` | schema หลักของฐานข้อมูล |
 | `server/src/database/migrations/` | migration SQL ที่เพิ่ม/ปรับ schema ในแต่ละ step |
 | `scripts/` | Windows helper scripts |
@@ -103,7 +112,7 @@ Dependency หลักจาก `server/package.json` และ license จา�
 | `docs/go-live-checklist.md` | checklist ก่อนเปิดใช้งานจริงสำหรับ IT |
 | `.agents/` | skill/instruction สำหรับช่วยทำงานแบบปลอดภัยกับโปรเจกต์นี้ |
 | `.env.example` | ตัวอย่าง config ที่ปลอดภัย ห้ามแทนที่ด้วยค่าจริงใน Git |
-| `.gitignore` | กัน `.env`, `backups/`, `*.sql`, runtime storage และ log ไม่ให้ commit |
+| `.gitignore` | กัน `.env`, `backups/`, ไฟล์ backup, runtime storage และ log ไม่ให้ commit |
 
 ## 4. สถาปัตยกรรมระบบ
 
@@ -115,7 +124,7 @@ QC user / IT user
   -> Frontend HTML/CSS/JavaScript in client/
   -> Express API in server/src/routes/
   -> Service layer in server/src/services/
-  -> MySQL database
+  -> PostgreSQL 17 database
   -> storage/attachments for uploaded files
 ```
 
@@ -125,15 +134,15 @@ Flow แบบเข้าใจง่าย:
 2. Express เสิร์ฟไฟล์ frontend จาก `client/`
 3. Frontend เรียก API ใต้ `/api/...`
 4. Backend ตรวจ login token และ role ก่อนทำงานสำคัญ
-5. Service layer อ่าน/เขียน MySQL และบางส่วนอ่าน/เขียนไฟล์ใน `storage/`
+5. Service layer อ่าน/เขียน PostgreSQL และบางส่วนอ่าน/เขียนไฟล์ใน `storage/`
 6. Backend ส่ง JSON หรือไฟล์ export กลับให้ browser
 
 ## 5. การติดตั้งและการใช้งานจริง
 
 แนวทางที่แนะนำ:
 
-- ใช้เครื่องแม่ 1 เครื่องสำหรับเปิด server และเก็บ MySQL
-- เครื่องลูกไม่ต้องติดตั้ง Node.js/MySQL/Git แค่มี Chrome และอยู่ใน network เดียวกัน
+- ใช้เครื่องแม่ 1 เครื่องสำหรับเปิด server และเก็บ PostgreSQL
+- เครื่องลูกไม่ต้องติดตั้ง Node.js/PostgreSQL/Git แค่มี Chrome และอยู่ใน network เดียวกัน
 - เครื่องแม่เปิดระบบผ่าน `scripts/start-server.bat` หรือ `npm start`
 - เครื่องลูกเปิดผ่าน `http://<server-ip>:3000/`
 
@@ -152,8 +161,8 @@ URL สำคัญ:
 APP_PORT=3000
 CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://192.168.x.x:3000
 DB_HOST=localhost
-DB_PORT=3306
-DB_NAME=brakecheck
+DB_PORT=5432
+DB_NAME=brakecheck_pg
 DB_USER=brakecheck_app
 DB_PASSWORD=********
 SESSION_SECRET=********************************
@@ -164,11 +173,13 @@ SESSION_SECRET=********************************
 - ห้ามส่ง `.env` จริงให้คนที่ไม่เกี่ยวข้อง
 - ห้าม commit `.env`
 - `SESSION_SECRET` ต้องยาวอย่างน้อย 32 ตัวอักษร และไม่ใช้ placeholder
-- ควรให้ IT สร้าง MySQL user เฉพาะระบบ เช่น `brakecheck_app` ที่มีสิทธิ์เท่าที่จำเป็น แทนการใช้ `root` ใน production
+- ควรให้ IT สร้าง PostgreSQL role `brakecheck_app` ที่มีสิทธิ์เท่าที่จำเป็น แทนการใช้ `postgres` ใน production
 
 ## 6. ฐานข้อมูล
 
-ชื่อฐานข้อมูลจาก `.env.example` และ `schema.sql`: `brakecheck`
+ชื่อฐานข้อมูลจาก `.env.example` และ `schema.sql`: `brakecheck_pg`
+
+Baseline schema ใช้ PostgreSQL 17 จำนวน 14 ตาราง โดยใช้ `IDENTITY`, `CHECK`, `JSONB` และเวลาแบบ `TIMESTAMP WITH TIME ZONE` (`TIMESTAMPTZ`) ตาม `server/src/database/schema.sql`
 
 Primary Key (PK) คือคอลัมน์หลักที่ใช้ระบุ 1 record ในตารางนั้น Foreign Key (FK) คือคอลัมน์ที่ผูกความสัมพันธ์ไปยังตารางอื่น
 
@@ -191,18 +202,18 @@ Primary Key (PK) คือคอลัมน์หลักที่ใช้ร
 
 | Column | Type | Key/Rule |
 | --- | --- | --- |
-| `id` | `INT AUTO_INCREMENT` | PK |
+| `id` | `INTEGER IDENTITY` | PK |
 | `employee_code` | `VARCHAR(20)` | UNIQUE, required |
 | `password_hash` | `VARCHAR(255)` | required, เก็บ hash ไม่ใช่ password จริง |
 | `full_name` | `VARCHAR(100)` | required |
 | `position` | `VARCHAR(100)` | required |
-| `role` | `ENUM('head','assistant','officer')` | default `officer` |
-| `status` | `ENUM('active','suspended')` | default `active` |
+| `role` | `TEXT` | default `officer`, จำกัดค่าด้วย `CHECK` |
+| `status` | `TEXT` | default `active`, จำกัดค่าด้วย `CHECK` |
 | `must_change_password` | `BOOLEAN` | default `TRUE` |
-| `failed_login_count` | `TINYINT` | default `0` |
-| `locked_until` | `DATETIME` | nullable |
-| `created_at` | `DATETIME` | default current timestamp |
-| `updated_at` | `DATETIME` | auto update |
+| `failed_login_count` | `SMALLINT` | default `0` |
+| `locked_until` | `TIMESTAMPTZ` | nullable |
+| `created_at` | `TIMESTAMPTZ` | default current timestamp |
+| `updated_at` | `TIMESTAMPTZ` | อัปเดตด้วย trigger |
 
 #### `auth_sessions`
 
@@ -210,13 +221,13 @@ Primary Key (PK) คือคอลัมน์หลักที่ใช้ร
 
 | Column | Type | Key/Rule |
 | --- | --- | --- |
-| `id` | `BIGINT AUTO_INCREMENT` | PK |
+| `id` | `BIGINT IDENTITY` | PK |
 | `token_id` | `CHAR(36)` | UNIQUE, required, รหัสเฉพาะของ token |
 | `user_id` | `INT` | nullable, FK -> `users.id` |
-| `expires_at` | `DATETIME` | required, เวลาที่ session หมดอายุ |
-| `revoked_at` | `DATETIME` | nullable, เวลาที่เพิกถอน session |
+| `expires_at` | `TIMESTAMPTZ` | required, เวลาที่ session หมดอายุ |
+| `revoked_at` | `TIMESTAMPTZ` | nullable, เวลาที่เพิกถอน session |
 | `revoke_reason` | `VARCHAR(40)` | nullable, เหตุผลที่เพิกถอน เช่น `logout` หรือ `password_change` |
-| `created_at` | `DATETIME` | default current timestamp |
+| `created_at` | `TIMESTAMPTZ` | default current timestamp |
 
 Index/Unique: `token_id`, `idx_auth_sessions_user_active`
 
@@ -226,12 +237,12 @@ Index/Unique: `token_id`, `idx_auth_sessions_user_active`
 
 | Column | Type | Key/Rule |
 | --- | --- | --- |
-| `id` | `INT AUTO_INCREMENT` | PK |
+| `id` | `INTEGER IDENTITY` | PK |
 | `actor_user_id` | `INT` | FK -> `users.id`, ผู้ทำรายการ |
 | `target_user_id` | `INT` | FK -> `users.id`, ผู้ถูกแก้ไข |
-| `action` | `ENUM('create_user','update_user','reset_password')` | required |
+| `action` | `TEXT` | required, จำกัดค่าด้วย `CHECK` รวม `change_password` |
 | `detail` | `TEXT` | nullable |
-| `created_at` | `DATETIME` | default current timestamp |
+| `created_at` | `TIMESTAMPTZ` | default current timestamp |
 
 #### `excel_import_batches`
 
@@ -239,17 +250,17 @@ Index/Unique: `token_id`, `idx_auth_sessions_user_active`
 
 | Column | Type | Key/Rule |
 | --- | --- | --- |
-| `id` | `INT AUTO_INCREMENT` | PK |
+| `id` | `INTEGER IDENTITY` | PK |
 | `original_file_name` | `VARCHAR(255)` | required |
 | `file_hash` | `CHAR(64)` | required |
 | `file_size` | `INT` | required |
 | `sheet_name` | `VARCHAR(100)` | default `DATA` |
-| `production_dates` | `JSON` | nullable |
+| `production_dates` | `JSONB` | nullable |
 | `total_rows` | `INT` | default `0` |
 | `imported_rows` | `INT` | default `0` |
 | `skipped_rows` | `INT` | default `0` |
 | `uploaded_by` | `INT` | FK -> `users.id` |
-| `uploaded_at` | `DATETIME` | default current timestamp |
+| `uploaded_at` | `TIMESTAMPTZ` | default current timestamp |
 
 #### `lots`
 
@@ -257,7 +268,7 @@ Index/Unique: `token_id`, `idx_auth_sessions_user_active`
 
 | Column | Type | Key/Rule |
 | --- | --- | --- |
-| `id` | `INT AUTO_INCREMENT` | PK |
+| `id` | `INTEGER IDENTITY` | PK |
 | `lot_number` | `VARCHAR(20)` | UNIQUE, มาจาก Excel Column A |
 | `lot_pack_barcode` | `VARCHAR(50)` | มาจาก Column R, ซ้ำได้ |
 | `lot_packing` | `VARCHAR(50)` | มาจาก Column X, ใช้ `-` เมื่อว่าง |
@@ -276,15 +287,15 @@ Index/Unique: `token_id`, `idx_auth_sessions_user_active`
 | `remark2` | `TEXT` | nullable |
 | `remark3` | `TEXT` | nullable |
 | `manual_reason` | `TEXT` | nullable |
-| `status` | `ENUM('pending','temp','waiting_pack','waiting_approve','need_fix','approved','ng','void')` | default `pending` |
+| `status` | `TEXT` | default `pending`, จำกัดค่าด้วย `CHECK` |
 | `imported_by` | `INT` | FK -> `users.id` |
 | `import_batch_id` | `INT` | FK -> `excel_import_batches.id` |
-| `import_source` | `ENUM('excel','manual')` | default `excel` |
+| `import_source` | `TEXT` | default `excel`, จำกัดค่าด้วย `CHECK` |
 | `voided_by` | `INT` | FK -> `users.id` |
-| `voided_at` | `DATETIME` | nullable |
+| `voided_at` | `TIMESTAMPTZ` | nullable |
 | `void_reason` | `TEXT` | nullable |
-| `created_at` | `DATETIME` | default current timestamp |
-| `updated_at` | `DATETIME` | auto update |
+| `created_at` | `TIMESTAMPTZ` | default current timestamp |
+| `updated_at` | `TIMESTAMPTZ` | อัปเดตด้วย trigger |
 
 Indexes: `idx_lots_status`, `idx_lots_model_name`, `idx_lots_production_date`, `idx_lots_lot_pack_barcode`, `idx_lots_lot_packing`
 
@@ -294,16 +305,16 @@ Indexes: `idx_lots_status`, `idx_lots_model_name`, `idx_lots_production_date`, `
 
 | Column | Type | Key/Rule |
 | --- | --- | --- |
-| `id` | `INT AUTO_INCREMENT` | PK |
+| `id` | `INTEGER IDENTITY` | PK |
 | `lot_id` | `INT` | FK -> `lots.id`, `ON DELETE RESTRICT` |
-| `action` | `ENUM('edit','void','approve','cancel_approve','send_back','review_ng','confirm_ng','upload_attachment','delete_attachment')` | required |
+| `action` | `TEXT` | required, จำกัดค่าด้วย `CHECK` |
 | `reason` | `TEXT` | required |
-| `before_data` | `JSON` | nullable |
-| `after_data` | `JSON` | nullable |
+| `before_data` | `JSONB` | nullable |
+| `after_data` | `JSONB` | nullable |
 | `changed_by` | `INT` | FK -> `users.id` |
 | `actor_name_snapshot` | `VARCHAR(200)` | nullable |
 | `actor_position_snapshot` | `VARCHAR(100)` | nullable |
-| `created_at` | `DATETIME` | default current timestamp |
+| `created_at` | `TIMESTAMPTZ` | default current timestamp |
 
 #### `lot_attachments`
 
@@ -311,16 +322,16 @@ Indexes: `idx_lots_status`, `idx_lots_model_name`, `idx_lots_production_date`, `
 
 | Column | Type | Key/Rule |
 | --- | --- | --- |
-| `id` | `INT AUTO_INCREMENT` | PK |
+| `id` | `INTEGER IDENTITY` | PK |
 | `lot_id` | `INT` | FK -> `lots.id`, `ON DELETE RESTRICT` |
 | `original_name` | `VARCHAR(255)` | required |
 | `stored_name` | `VARCHAR(255)` | UNIQUE |
 | `mime_type` | `VARCHAR(100)` | required |
 | `file_size` | `INT` | required |
 | `uploaded_by` | `INT` | FK -> `users.id` |
-| `uploaded_at` | `DATETIME` | default current timestamp |
+| `uploaded_at` | `TIMESTAMPTZ` | default current timestamp |
 | `deleted_by` | `INT` | FK -> `users.id` |
-| `deleted_at` | `DATETIME` | nullable, ใช้ soft-delete |
+| `deleted_at` | `TIMESTAMPTZ` | nullable, ใช้ soft-delete |
 
 Index/Unique: `uq_lot_attachments_stored_name`, `idx_lot_attachments_lot_active`
 
@@ -330,12 +341,12 @@ Index/Unique: `uq_lot_attachments_stored_name`, `idx_lot_attachments_lot_active`
 
 | Column | Type | Key/Rule |
 | --- | --- | --- |
-| `id` | `INT AUTO_INCREMENT` | PK |
+| `id` | `INTEGER IDENTITY` | PK |
 | `qty_min` | `INT` | required, `>= 0` |
 | `qty_max` | `INT` | nullable, ต้อง `>= qty_min` |
 | `sample_count` | `INT` | required, `> 0` |
 | `updated_by` | `INT` | FK -> `users.id` |
-| `updated_at` | `DATETIME` | auto update |
+| `updated_at` | `TIMESTAMPTZ` | อัปเดตด้วย trigger |
 
 #### `dimension_instrument_prefixes`
 
@@ -343,9 +354,9 @@ Index/Unique: `uq_lot_attachments_stored_name`, `idx_lot_attachments_lot_active`
 
 | Column | Type | Key/Rule |
 | --- | --- | --- |
-| `slot_no` | `TINYINT` | PK, 1-5 |
+| `slot_no` | `SMALLINT` | PK, 1-5 |
 | `prefix` | `VARCHAR(20)` | format `A-00-` |
-| `updated_at` | `DATETIME` | auto update |
+| `updated_at` | `TIMESTAMPTZ` | อัปเดตด้วย trigger |
 
 #### `form_config`
 
@@ -353,19 +364,19 @@ Index/Unique: `uq_lot_attachments_stored_name`, `idx_lot_attachments_lot_active`
 
 | Column | Type | Key/Rule |
 | --- | --- | --- |
-| `id` | `INT AUTO_INCREMENT` | PK |
-| `form_type` | `ENUM('dimension','packing')` | required |
+| `id` | `INTEGER IDENTITY` | PK |
+| `form_type` | `TEXT` | required, จำกัดค่าด้วย `CHECK` |
 | `topic_name` | `VARCHAR(200)` | required |
-| `input_count` | `TINYINT` | default `1`, `> 0` |
-| `decimal_places` | `TINYINT` | default `0`, 0-3 |
-| `input_type` | `ENUM('number','pass_fail')` | required |
+| `input_count` | `SMALLINT` | default `1`, `> 0` |
+| `decimal_places` | `SMALLINT` | default `0`, 0-3 |
+| `input_type` | `TEXT` | required, จำกัดค่าด้วย `CHECK` |
 | `measure_pieces` | `VARCHAR(50)` | default `all` |
 | `rule_key` | `VARCHAR(80)` | nullable |
-| `display_order` | `TINYINT` | default `1` |
+| `display_order` | `SMALLINT` | default `1` |
 | `remark` | `TEXT` | nullable |
 | `is_active` | `BOOLEAN` | default `TRUE` |
 | `updated_by` | `INT` | FK -> `users.id` |
-| `updated_at` | `DATETIME` | auto update |
+| `updated_at` | `TIMESTAMPTZ` | อัปเดตด้วย trigger |
 
 Index: `idx_form_config_type_active`
 
@@ -375,18 +386,18 @@ Index: `idx_form_config_type_active`
 
 | Column | Type | Key/Rule |
 | --- | --- | --- |
-| `id` | `INT AUTO_INCREMENT` | PK |
+| `id` | `INTEGER IDENTITY` | PK |
 | `setting_area` | `VARCHAR(80)` | required |
 | `action` | `VARCHAR(80)` | required |
 | `target_type` | `VARCHAR(80)` | nullable |
 | `target_id` | `INT` | nullable |
 | `reason` | `TEXT` | nullable |
-| `before_data` | `JSON` | nullable |
-| `after_data` | `JSON` | nullable |
+| `before_data` | `JSONB` | nullable |
+| `after_data` | `JSONB` | nullable |
 | `changed_by` | `INT` | FK -> `users.id` |
 | `actor_name_snapshot` | `VARCHAR(200)` | nullable |
 | `actor_position_snapshot` | `VARCHAR(100)` | nullable |
-| `created_at` | `DATETIME` | default current timestamp |
+| `created_at` | `TIMESTAMPTZ` | default current timestamp |
 
 Index: `idx_system_setting_audit_logs_area_created`
 
@@ -396,26 +407,26 @@ Index: `idx_system_setting_audit_logs_area_created`
 
 | Column | Type | Key/Rule |
 | --- | --- | --- |
-| `id` | `INT AUTO_INCREMENT` | PK |
+| `id` | `INTEGER IDENTITY` | PK |
 | `lot_id` | `INT` | UNIQUE, FK -> `lots.id` |
-| `status` | `ENUM('draft','completed')` | default `draft` |
+| `status` | `TEXT` | default `draft`, จำกัดค่าด้วย `CHECK` |
 | `inspection_date` | `DATE` | nullable |
-| `shift` | `ENUM('1','2')` | nullable |
-| `instrument_codes` | `JSON` | nullable |
+| `shift` | `TEXT` | nullable, จำกัดค่าด้วย `CHECK` |
+| `instrument_codes` | `JSONB` | nullable |
 | `rivet_no` | `VARCHAR(50)` | nullable |
 | `production_code` | `VARCHAR(50)` | nullable |
-| `brake_type` | `ENUM('normal','taper','sheet')` | nullable |
-| `brake_model` | `ENUM('drilled_bored','no_hole')` | nullable |
+| `brake_type` | `TEXT` | nullable, จำกัดค่าด้วย `CHECK` |
+| `brake_model` | `TEXT` | nullable, จำกัดค่าด้วย `CHECK` |
 | `rivet_hole_thickness` | `DECIMAL(3,1)` | nullable |
 | `sample_count` | `INT` | nullable, `> 0` |
-| `form_config_snapshot` | `JSON` | snapshot หัวข้อฟอร์มตอน complete |
-| `pieces_data` | `JSON` | ค่าตรวจจริง |
+| `form_config_snapshot` | `JSONB` | snapshot หัวข้อฟอร์มตอน complete |
+| `pieces_data` | `JSONB` | ค่าตรวจจริง |
 | `created_by` | `INT` | FK -> `users.id` |
 | `updated_by` | `INT` | FK -> `users.id` |
 | `completed_by` | `INT` | FK -> `users.id` |
-| `completed_at` | `DATETIME` | nullable |
-| `created_at` | `DATETIME` | default current timestamp |
-| `updated_at` | `DATETIME` | auto update |
+| `completed_at` | `TIMESTAMPTZ` | nullable |
+| `created_at` | `TIMESTAMPTZ` | default current timestamp |
+| `updated_at` | `TIMESTAMPTZ` | อัปเดตด้วย trigger |
 
 Index/Unique: `uq_dimension_inspections_lot`, `idx_dimension_inspections_status`
 
@@ -425,18 +436,18 @@ Index/Unique: `uq_dimension_inspections_lot`, `idx_dimension_inspections_status`
 
 | Column | Type | Key/Rule |
 | --- | --- | --- |
-| `id` | `INT AUTO_INCREMENT` | PK |
+| `id` | `INTEGER IDENTITY` | PK |
 | `lot_id` | `INT` | UNIQUE, FK -> `lots.id` |
-| `status` | `ENUM('draft','completed')` | default `draft` |
+| `status` | `TEXT` | default `draft`, จำกัดค่าด้วย `CHECK` |
 | `inspection_date` | `DATE` | nullable |
-| `form_config_snapshot` | `JSON` | snapshot หัวข้อฟอร์มตอน complete |
-| `results_data` | `JSON` | ค่าตรวจบรรจุ |
+| `form_config_snapshot` | `JSONB` | snapshot หัวข้อฟอร์มตอน complete |
+| `results_data` | `JSONB` | ค่าตรวจบรรจุ |
 | `created_by` | `INT` | FK -> `users.id` |
 | `updated_by` | `INT` | FK -> `users.id` |
 | `completed_by` | `INT` | FK -> `users.id` |
-| `completed_at` | `DATETIME` | nullable |
-| `created_at` | `DATETIME` | default current timestamp |
-| `updated_at` | `DATETIME` | auto update |
+| `completed_at` | `TIMESTAMPTZ` | nullable |
+| `created_at` | `TIMESTAMPTZ` | default current timestamp |
+| `updated_at` | `TIMESTAMPTZ` | อัปเดตด้วย trigger |
 
 Index/Unique: `uq_packing_inspections_lot`, `idx_packing_inspections_status`
 
@@ -446,16 +457,16 @@ Index/Unique: `uq_packing_inspections_lot`, `idx_packing_inspections_status`
 
 | Column | Type | Key/Rule |
 | --- | --- | --- |
-| `id` | `INT AUTO_INCREMENT` | PK |
+| `id` | `INTEGER IDENTITY` | PK |
 | `inspection_id` | `INT` | FK -> `dimension_inspections.id`, `ON DELETE CASCADE` |
 | `topic_config_id` | `INT` | FK -> `form_config.id` |
 | `topic_name` | `VARCHAR(200)` | required |
 | `piece_no` | `INT` | `> 0` |
-| `input_index` | `TINYINT` | `> 0` |
+| `input_index` | `SMALLINT` | `> 0` |
 | `numeric_value` | `DECIMAL(12,3)` | nullable |
-| `pass_fail_value` | `ENUM('pass','fail')` | nullable |
+| `pass_fail_value` | `TEXT` | nullable, จำกัดค่าด้วย `CHECK` |
 | `raw_value` | `VARCHAR(100)` | nullable |
-| `created_at` | `DATETIME` | default current timestamp |
+| `created_at` | `TIMESTAMPTZ` | default current timestamp |
 
 Index: `idx_dimension_inspection_values_inspection`
 
@@ -604,7 +615,7 @@ QC inspection ที่รองรับ:
 - พบในโค้ดปัจจุบัน
 - upload Excel เพื่อ preview ก่อน
 - ตรวจ type, sheet, header, duplicate, date, quantity
-- save ลง MySQL เมื่อผ่าน validation
+- save ลง PostgreSQL เมื่อผ่าน validation
 - เฉพาะ `head`, `assistant`
 
 ### Preview Import
@@ -647,7 +658,7 @@ QC inspection ที่รองรับ:
 - เฉพาะ `head`
 - list/create/update/reset password
 - บังคับเปลี่ยน password หลัง reset/create ตาม field `must_change_password`
-- การ reset password โดย `head` ยังไม่เพิกถอน login session เดิมของผู้ใช้นั้นในโค้ดปัจจุบัน
+- การ reset password โดย `head` เพิกถอน login session เดิมของผู้ใช้นั้นทันที
 
 ### Reports
 
@@ -657,6 +668,14 @@ QC inspection ที่รองรับ:
 - Results เป็นหน้าดูงานที่จบแล้วแบบ read-only
 - จำนวน attachment ใน Results นับเฉพาะไฟล์ที่ยังไม่ถูก soft-delete
 - ถ้า metadata ของ attachment ยังอยู่แต่ไฟล์จริงบนเครื่องแม่หาย endpoint download จะตอบ 404 และแจ้งให้ติดต่อผู้ดูแลระบบ
+
+### Summary
+
+- เฉพาะ `head`, `assistant`
+- สรุปตามวันที่ผลิต โดยกรองช่วงวันที่ รุ่น เกรด และแหล่งหัวข้อตรวจได้
+- แสดง Final Lot, Approved, รับทราบ NG, NG Rate และงานที่ยังไม่เสร็จ
+- แสดงแนวโน้มคุณภาพ หัวข้อที่พบ NG สูงสุด รุ่นที่พบ NG สูงสุด และเปรียบเทียบรายปีไม่เกิน 3 ปี
+- แสดงผลรวมในระบบเท่านั้น ไม่แสดงข้อมูลรายบุคคล และไม่ใช้ chart dependency เพิ่ม
 
 ### Backup / Restore
 
@@ -674,9 +693,11 @@ QC inspection ที่รองรับ:
 | Script | ใช้ทำอะไร | ข้อควรระวัง |
 | --- | --- | --- |
 | `scripts/start-server.bat` | เปิด BrakeCheck server แบบ manual | ต้องอยู่ที่เครื่องแม่หรือเครื่องที่ตั้งค่าโปรเจกต์ไว้ครบ |
+| `scripts/stop-server.bat` | หยุด server ที่ helper เปิดโดยตรวจ PID และถามยืนยัน | ห้ามหยุดระหว่างผู้ใช้บันทึกหรือ Import |
 | `scripts/check-system.bat` | ตรวจความพร้อมพื้นฐานของระบบ | ใช้ตรวจหลังติดตั้ง/ก่อนส่งใช้งาน |
-| `scripts/backup-database.bat` | สำรอง MySQL เป็นไฟล์ `.sql` ใน `backups/` | ไฟล์ backup มีข้อมูลจริง ห้าม commit |
-| `scripts/backup-system.bat` | สำรอง database และ `storage/attachments` | เหมาะก่อน update หรือก่อนงานเสี่ยง |
+| `scripts/setup-local-env.bat` | สร้าง `.env` ครั้งแรกโดยถามรหัสผ่านแบบซ่อน | ไม่อ่านหรือเขียนทับ `.env` ที่มีอยู่ |
+| `scripts/backup-database.bat` | สำรอง PostgreSQL เป็นไฟล์ custom-format `.backup` ใน `backups/` | ไฟล์ backup มีข้อมูลจริง ห้าม commit |
+| `scripts/backup-system.bat` | สร้างชุด `database.backup`, `attachments.zip`, `backup-info.txt` | เหมาะก่อน update หรือก่อนงานเสี่ยง |
 | `scripts/auto-start-server.bat` | เปิด server จาก Windows Task Scheduler | ตรวจ log ถ้าเปิดเองหลัง login ไม่สำเร็จ |
 | `scripts/install-auto-start.bat` | ติดตั้ง Auto Start task | ควรให้ IT ตรวจสิทธิ์ Task Scheduler |
 | `scripts/uninstall-auto-start.bat` | ถอน Auto Start task | ใช้เมื่อต้องหยุดการเปิด server อัตโนมัติ |
@@ -686,7 +707,7 @@ QC inspection ที่รองรับ:
 
 ## 9. API และ Backend
 
-ทุก endpoint ใต้ `/api` ส่ง JSON เป็นหลัก ยกเว้น endpoint download/export ที่ส่งไฟล์ ปัจจุบันพบ 52 endpoints เมื่อนับ `/api/health`
+ทุก endpoint ใต้ `/api` ส่ง JSON เป็นหลัก ยกเว้น endpoint download/export ที่ส่งไฟล์
 
 Auth rule:
 
@@ -703,7 +724,7 @@ Auth rule:
 | POST | `/api/auth/change-password` | Auth | เปลี่ยน password และเพิกถอน session เดิม | `currentPassword`, `newPassword` | ok/message, validation, ต้อง Login ใหม่ |
 | GET | `/api/auth/sessions/retention-status` | head | ตรวจจำนวน session หมดอายุ/ถูกเพิกถอนที่เก่าเกินเกณฑ์ | token | `retentionDays`, counts, `cleanupEnabled` |
 | GET | `/api/dashboard` | head/assistant/officer | Dashboard stats/list | `date`, `startDate`, `endDate`, `status`, `search`, `page`, `pageSize` | stats/items/summary |
-| GET | `/api/database/health` | head/assistant | ตรวจ MySQL และตารางที่ระบบต้องมี | token | database/version/required/found/missing tables, 401/403 |
+| GET | `/api/database/health` | head/assistant | ตรวจ PostgreSQL และตารางที่ระบบต้องมี | token | database/version/required/found/missing tables, 401/403 |
 | POST | `/api/excel/preview` | head/assistant | Preview Excel | multipart `excelFile` | sheet/summary/rows/warnings/errors |
 | POST | `/api/excel/import` | head/assistant | Confirm save Excel | multipart `excelFile`, `confirmedProductionDates` | import summary, 400/409 |
 | GET | `/api/export-dimension/preview` | head/assistant | Preview export dimension | model/date/topic filters | items/topics/summary |
@@ -737,6 +758,8 @@ Auth rule:
 | GET | `/api/reports/export/lots/:lotNumber/excel` | head/assistant | download Excel report | `lotNumber` | `.xlsx`, ต้อง report-ready |
 | GET | `/api/reports/export/lots/:lotNumber/pdf` | head/assistant | download PDF report | `lotNumber` | `.pdf`, ต้อง font/report-ready |
 | GET | `/api/results/lots` | head/assistant/officer | Results read-only | `tab`, `dateMode`, date range, search, page | items/counts |
+| GET | `/api/summary` | head/assistant | สรุปแนวโน้มคุณภาพ | date/model/grade/topic/year filters | KPI, trend, NG topics/models, yearly comparison |
+| GET | `/api/summary/lots` | head/assistant | ดูรายการ Lot ที่มาของตัวเลขสรุป | metric/filter/page | items/summary |
 | GET | `/api/settings` | head/assistant | โหลด system settings | token | topics/rules/prefixes/audit |
 | POST | `/api/settings/topics` | head/assistant | เพิ่มหัวข้อฟอร์ม | topic values/reason | settings/audit |
 | PATCH | `/api/settings/topics/batch-display` | head/assistant | แก้ display หลายหัวข้อ | `items` | settings/audit |
@@ -777,6 +800,7 @@ Validation/error สำคัญ:
 | `export-report.page.js` | Export report ราย Lot | `reports.api.js` | head/assistant | `/api/reports/export/lots`, `/excel`, `/pdf` |
 | `export-dimension.page.js` | Export Dimension History | `export-dimension.api.js` | head/assistant | `/api/export-dimension/preview`, `/excel` |
 | `results.page.js` | Results read-only | `results.api.js` | head/assistant/officer | `/api/results/lots` |
+| `summary.page.js` | Summary แนวโน้มคุณภาพ | `summary.api.js` | head/assistant | `/api/summary`, `/api/summary/lots` |
 | `system-settings.page.js` | ตั้งค่าฟอร์ม/sampling/prefix | `settings.api.js` | head/assistant | `/api/settings...` |
 | `users.page.js` | จัดการผู้ใช้ | `users.api.js` | head | `/api/users...` |
 | `home.page.js` | พบไฟล์ใน `client/src/pages/` | ไม่พบ service mapping | ไม่พบใน navigation ปัจจุบัน | ไม่พบ API mapping ใน `client/src/app.js` |
@@ -797,7 +821,7 @@ Validation/error สำคัญ:
 - Frontend ส่ง token ผ่าน `Authorization: Bearer <token>`
 - token มีรหัส session เฉพาะ และ Backend ตรวจ record ใน `auth_sessions` ผ่าน `requireAuth`
 - Logout และการเปลี่ยนรหัสผ่านของผู้ใช้เพิกถอน session เดิมฝั่ง server
-- การ reset password โดย `head` ยังไม่เพิกถอน session เดิม ต้องให้ IT/เจ้าของระบบพิจารณานโยบายก่อน production
+- การ reset password โดย `head` เพิกถอน session เดิมของผู้ใช้นั้นทันที
 - Session หมดอายุ ถูกเพิกถอน หรือ token ผิดจะตอบ 401
 - เกณฑ์ตรวจ session เก่าคือ 180 วัน แต่ `cleanupEnabled=false` และไม่มีการลบอัตโนมัติ
 
@@ -817,7 +841,7 @@ Role/Permission:
 การป้องกันข้อมูลลับ:
 
 - `.env` ถูก ignore โดย Git
-- `backups/`, `*.sql`, runtime `storage/uploads`, `storage/exports`, `storage/attachments` ถูก ignore
+- `backups/`, ไฟล์ database backup, runtime `storage/uploads`, `storage/exports`, `storage/attachments` ถูก ignore
 - `.env.example` ใช้ placeholder เท่านั้น
 - รายงานนี้ไม่ใส่ password จริง, token, session secret, backup content หรือไฟล์แนบจริง
 
@@ -834,7 +858,7 @@ Backend validation:
 
 - ใช้ HTTPS หรือจำกัด network ภายในถ้า policy บริษัทต้องการ
 - ตั้ง firewall ให้เปิดเฉพาะ port ที่จำเป็น เช่น `3000`
-- ใช้ MySQL user เฉพาะระบบ ไม่ใช้ `root`
+- ใช้ PostgreSQL role `brakecheck_app` ไม่ใช้ `postgres` เป็น runtime user
 - ตั้ง `SESSION_SECRET` ใหม่ที่ strong
 - ตั้ง backup storage ที่อยู่นอก repo
 - จำกัดสิทธิ์ folder `storage/` และ `backups/`
@@ -846,8 +870,8 @@ Backend validation:
 
 Backup:
 
-- `scripts/backup-database.bat`: สำรองเฉพาะ MySQL เป็น `.sql`
-- `scripts/backup-system.bat`: สำรอง MySQL และ `storage/attachments` เหมาะสำหรับก่อน update หรือก่อนงานเสี่ยง
+- `scripts/backup-database.bat`: สำรอง PostgreSQL เป็น custom-format `.backup`
+- `scripts/backup-system.bat`: สร้างชุด `database.backup`, `attachments.zip`, `backup-info.txt`
 - `scripts/auto-backup-database.bat`: auto backup เฉพาะ database
 - `scripts/auto-backup-system.bat`: auto backup ทั้ง database และ attachments
 - `scripts/register-auto-backup-task.ps1`: สร้าง/แก้/ลบ Windows Task Scheduler สำหรับ auto backup
@@ -872,7 +896,7 @@ Update:
 
 - `.env`
 - `backups/`
-- `*.sql` ยกเว้น schema/migration ใต้ `server/src/database/`
+- ไฟล์ database backup เช่น `*.backup`, `*.dump` และ SQL backup; ยกเว้น schema/migration ใต้ `server/src/database/`
 - backup `.zip`
 - log
 - runtime storage ที่มีข้อมูลโรงงานจริง
@@ -881,8 +905,10 @@ Update:
 
 แนวทางแนะนำ:
 
+- ติดตั้งแบบ clean installation: สร้าง PostgreSQL `brakecheck_pg` ใหม่ที่สะอาด ไม่ Restore ฐานทดสอบจากบ้าน
+- ไม่มีข้อมูล production จาก MySQL ที่ต้องนำเข้า
 - ใช้เครื่องแม่ 1 เครื่อง
-- เครื่องแม่ติดตั้ง Node.js, MySQL, Chrome, Git, VS Code
+- เครื่องแม่ติดตั้ง Node.js, PostgreSQL 17 และ Chrome; Git/VS Code ติดตั้งเมื่อ IT ต้องใช้ดูแล source
 - เครื่องลูกใช้ Chrome และอยู่ network เดียวกับเครื่องแม่
 - เครื่องลูกเข้าผ่าน `http://<server-ip>:3000/`
 - ควรให้ IT กำหนด static IP หรือ DHCP reservation ให้เครื่องแม่
@@ -893,7 +919,7 @@ Firewall / Network / IP:
 - ต้องอนุญาตให้เครื่องลูกเข้า port `3000` ของเครื่องแม่
 - ไม่ควรปิด firewall เองโดยไม่มี IT
 - ถ้า IP เครื่องแม่เปลี่ยน URL ของเครื่องลูกจะเปลี่ยนตาม
-- MySQL ไม่ควรเปิดให้เครื่องลูกต่อโดยตรงถ้าไม่จำเป็น
+- PostgreSQL ไม่ควรเปิดให้เครื่องลูกต่อโดยตรงถ้าไม่จำเป็น
 
 สิ่งที่ต้องคุยกับ IT:
 
@@ -901,7 +927,7 @@ Firewall / Network / IP:
 - ใครดูแลเครื่องแม่
 - จะใช้ IP แบบคงที่หรือไม่
 - เปิด firewall port `3000` อย่างไร
-- MySQL user/password เก็บที่ไหนและใครรับผิดชอบ
+- PostgreSQL role/password เก็บที่ไหนและใครรับผิดชอบ
 - backup เก็บที่ไหน นานเท่าไร ใครตรวจ
 - ถ้าเครื่องแม่เสียจะ restore จาก backup อย่างไร
 
@@ -923,7 +949,7 @@ Firewall / Network / IP:
 - ทดสอบ session หมดอายุหรือ token ไม่ถูกต้องกลับ Login
 - Logout แล้ว token เดิมต้องใช้เรียก API ไม่ได้
 - เปลี่ยน password ของตนเองแล้ว session เดิมต้องใช้ไม่ได้และผู้ใช้ต้อง Login ใหม่
-- ทดสอบและบันทึกข้อจำกัดว่า reset password โดย `head` ปัจจุบันยังไม่เพิกถอน session เดิม
+- reset password โดย `head` แล้ว session เดิมของผู้ใช้ต้องใช้ไม่ได้
 - `head` เรียก `/api/auth/sessions/retention-status` ได้ และ role อื่นต้องถูกปฏิเสธ
 - `head`/`assistant` เรียก `/api/database/health` ได้ ส่วน `officer` ต้องได้ 403
 - ตรวจว่า Database Health รายงาน required/found/missing tables ครบ 14 ตาราง
@@ -944,34 +970,34 @@ Firewall / Network / IP:
 - ตรวจ History และ Audit
 - Export Excel/PDF report
 - Export Dimension History
+- เปิด Summary แล้วตรวจ filter, KPI, แนวโน้ม, NG topic/model และรายปี โดยต้องไม่แสดงข้อมูลรายบุคคล
 - เปิด Results แล้วตรวจว่า read-only
 - ตรวจ permission เช่น `officer` เข้า Users/Settings/Export ไม่ได้
 - เปิดจากเครื่องลูกผ่าน `http://<server-ip>:3000/`
 - ทดสอบ `scripts/check-system.bat`
 - ทดสอบ `scripts/backup-system.bat`
-- ตรวจว่า backup ได้ทั้ง `.sql` และ attachment `.zip`
+- ตรวจว่าชุด full backup มี `database.backup`, `attachments.zip` และ `backup-info.txt`
 
 ## 15. ความเสี่ยงและข้อเสนอแนะสำหรับ IT
 
 จุดที่ควรระวัง:
 
 - `.env` มี database password และ session secret
-- `backups/` และ `.sql` มีข้อมูล QC จริง
+- `backups/` และไฟล์ `.backup` มีข้อมูล QC จริง
 - `storage/attachments` มีไฟล์แนบจริงของโรงงาน
-- ถ้าใช้ MySQL `root` ใน production ความเสี่ยงสูง
+- ถ้าใช้ PostgreSQL superuser `postgres` เป็น runtime user ความเสี่ยงสูง
 - ถ้าไม่มี backup นอกเครื่องแม่ เมื่อเครื่องเสียอาจกู้คืนไม่ครบ
 - ถ้า firewall เปิดกว้างเกินไป อาจมีเครื่องที่ไม่เกี่ยวข้องเข้าถึงระบบ
 - ถ้าเปลี่ยน settings หลังมี completed inspection ต้องเคารพ snapshot เดิม
 - ถ้าแก้ database โดยไม่ใช้ migration/backup อาจกระทบข้อมูลย้อนหลัง
 - ตาราง `auth_sessions` อาจโตขึ้นตามจำนวนการ Login เพราะยังไม่มี automatic cleanup; ต้องกำหนด retention ก่อนลบข้อมูลเก่า
-- การ reset password โดย `head` ยังไม่เพิกถอน session เดิม อาจไม่ตรงกับ security policy ของบริษัท
 
 สิ่งที่ควรตรวจสอบก่อน production:
 
 - ตั้ง `.env` จริงให้ครบและปลอดภัย
-- ตั้ง MySQL user เฉพาะระบบ
+- ตั้ง PostgreSQL role `brakecheck_app`
 - ตั้ง `SESSION_SECRET` ใหม่
-- ติดตั้ง MySQL service ให้ start อัตโนมัติ
+- ติดตั้ง PostgreSQL service ให้ start อัตโนมัติ
 - ตรวจ Windows Task Scheduler ถ้าใช้ auto start/auto backup
 - ทดสอบ restore กับ test database
 - กำหนด backup retention และที่เก็บ backup นอก repo
@@ -1101,5 +1127,5 @@ git diff --check
 - ไม่พบการคำนวณ CP/CPK ในระบบ จากเอกสาร Step 14 ให้ export ไปวิเคราะห์ภายนอก
 - พบ `home.page.js` แต่ไม่พบว่าใช้เป็นหน้าใน navigation ปัจจุบันของ `client/src/app.js`
 - ไม่พบ automatic cleanup ของ `auth_sessions`; พบเฉพาะ endpoint สำหรับตรวจจำนวน session เก่าและ `cleanupEnabled=false`
-- ไม่พบการเพิกถอน session เดิมเมื่อ `head` reset password ให้ผู้ใช้
+- พบการเพิกถอน session เดิมเมื่อ `head` reset password ให้ผู้ใช้
 - ไม่ตรวจข้อมูลจริงใน database, `.env`, `backups/`, หรือ `storage/attachments`

@@ -2,18 +2,18 @@
 
 เอกสารนี้เป็นแผนย้าย BrakeCheck จาก MySQL ไป PostgreSQL 17 สำหรับโปรเจกต์ `BrakeCheck_PG`
 
-สถานะเอกสาร: Draft สำหรับให้ผู้ใช้/IT ตรวจและอนุมัติก่อนเริ่มแก้โค้ดจริง
+สถานะเอกสาร: Implementation, การทดสอบบนเครื่องที่บ้าน และเอกสาร Phase 11 เสร็จแล้ว รอ IT ติดตั้ง/UAT บนเครื่องบริษัท
 
 วันที่จัดทำ: 2026-07-15
 
+วันที่อัปเดตสถานะล่าสุด: 2026-07-28
+
 ขอบเขตความปลอดภัยของเอกสารนี้:
 
-- เป็นเอกสารแผนงานเท่านั้น
-- ยังไม่ติดตั้ง dependency ใหม่
-- ยังไม่สร้าง table
-- ยังไม่รัน schema หรือ migration
-- ยังไม่ย้ายข้อมูลจริง
-- ยังไม่เชื่อมต่อหรือแก้ไขฐานข้อมูล MySQL เดิม
+- Phase 11 แก้เฉพาะเอกสาร ไม่ติดตั้ง dependency และไม่เขียนฐานข้อมูล
+- Implementation และ schema PostgreSQL ผ่านการทดสอบบนเครื่องที่บ้านแล้ว
+- ไม่มีข้อมูล production เดิมให้ย้าย
+- ไม่เชื่อมต่อหรือแก้ไขฐานข้อมูล MySQL เดิม
 - ไม่ใส่ password, token, secret, ค่า `.env` จริง, backup จริง หรือข้อมูลโรงงานจริง
 
 ## 1. เป้าหมายและขอบเขต
@@ -30,7 +30,7 @@
 - การทำงานแบบ local-first บน Windows
 - เครื่องลูกใช้ Chrome เรียก Node.js API เท่านั้น
 - เครื่องลูกไม่เชื่อมต่อ PostgreSQL โดยตรง
-- MySQL project เดิมที่ `C:\Users\KONG\Documents\BrakeCheck` ต้องยังเก็บไว้เป็นระบบสำรอง
+- MySQL project เดิมเป็นแหล่งอ้างอิงพฤติกรรม ไม่ใช่ฐาน production หรือ fallback ที่ต้อง cutover กลับ
 
 ขอบเขตแรกของงาน:
 
@@ -55,23 +55,16 @@
 - ไม่เพิ่มระบบ restore อัตโนมัติ
 - ไม่ hard-delete production records
 
-## 3. สถานะระบบ MySQL เดิม
+## 3. Baseline MySQL ตอนเริ่มแผน (ข้อมูลประวัติ)
 
-จากการสำรวจ `BrakeCheck_PG` ปัจจุบัน โค้ดยังเป็นฐาน MySQL เดิมเกือบทั้งหมด
+รายการต่อไปนี้เป็นผลสำรวจตอนเริ่ม migration และไม่ใช่สถานะ runtime ปัจจุบัน:
 
 รายการสำคัญ:
 
-- `server/package.json` ยังใช้ dependency `mysql2`
-- `server/src/config/database.js` สร้าง MySQL connection pool ด้วย `mysql2/promise`
-- `server/src/config/env.js` ยัง default เป็น `DB_PORT=3306`, `DB_NAME=brakecheck`, `DB_USER=root`
-- `server/src/database/schema.sql` เป็น MySQL schema
-- `server/src/database/seed.sql` ใช้ MySQL syntax เช่น `INSERT IGNORE`
-- `server/src/database/migrations/` เป็น MySQL migration เดิม
-- service layer ใช้ SQL placeholder แบบ `?`
-- service layer ใช้ MySQL result shape เช่น `insertId` และ `affectedRows`
-- service layer ใช้ MySQL error code เช่น `ER_DUP_ENTRY`, `ER_NO_SUCH_TABLE`, `ER_BAD_FIELD_ERROR`
-- backup scripts ใช้ `mysqldump`
-- docs หลายไฟล์ยังอธิบาย MySQL
+- package เคยใช้ `mysql2` เป็นตัวเชื่อมต่อหลัก
+- config เดิมใช้ port `3306`, database `brakecheck`, user `root`
+- schema/service/backup scripts เดิมใช้ syntax และเครื่องมือ MySQL
+- รายการไฟล์และรูปแบบเดิมถูกเก็บไว้ในหัวข้อถัดไปเพื่อเป็นหลักฐานการ migration
 
 จำนวน table ที่พบใน `server/src/database/schema.sql`: 14 tables
 
@@ -92,27 +85,25 @@
 - `packing_inspections`
 - `dimension_inspection_values`
 
-หมายเหตุ: `docs/project-plan.md` ยังไม่พบใน `BrakeCheck_PG` แม้ถูกระบุในรายการสำรวจ จึงต้องให้ผู้ใช้ยืนยันว่าจะสร้างใหม่หรือนำเข้าจากแหล่งอื่น
-
 ## 4. สถานะ PostgreSQL ปัจจุบัน
 
-ข้อมูลจากผู้ใช้:
+สถานะ ณ 2026-07-28:
 
-- PostgreSQL 17 ติดตั้งแล้ว
-- Host: `localhost`
-- Port: `5432`
-- Database: `brakecheck_pg`
-- Application user: `brakecheck_app`
-- `brakecheck_app` ไม่ใช่ Superuser
-- ทดสอบ login เข้า `brakecheck_pg` สำเร็จแล้ว
-- Database ยังว่างและยังไม่มี table
+- Runtime services ใช้ PostgreSQL 17 ผ่าน `pg`
+- ตัวอย่าง config ใช้ Host `localhost`, Port `5432`, Database `brakecheck_pg`
+- Application role คือ `brakecheck_app` และไม่ใช่ Superuser
+- Baseline schema มี 14 ตาราง พร้อมสิทธิ์ runtime และผ่านการทดสอบ
+- Auth, Session, Permission, workflow QC, Summary, Export และ Backup/Restore ผ่าน UAT บนเครื่องที่บ้าน
+- ไม่มีข้อมูล production จาก MySQL ที่ต้องย้าย
+- ชุดติดตั้งสะอาดเตรียมสำหรับเครื่องบริษัทแล้ว
+- ยังไม่ถือว่า production live จนกว่า IT ติดตั้งและผู้ใช้ UAT บนเครื่องบริษัทผ่าน
 
 ข้อห้าม:
 
 - ห้ามขอหรือแสดง PostgreSQL password ในแชต
 - ห้ามอ่านหรือพิมพ์ค่า `.env` จริง
-- ห้ามรัน schema/migration จนกว่าผู้ใช้อนุมัติ
-- ห้ามสร้าง table ในรอบวางแผน
+- การลง schema บนเครื่องบริษัทต้องใช้ฐานใหม่ที่สะอาดและบัญชี migration owner
+- ห้าม Restore ฐานทดสอบจากบ้านเข้าเป็นฐาน production
 
 ## 5. Target Architecture
 
@@ -523,11 +514,11 @@ Checklist:
 - backup database และ attachments ได้
 - restore ซ้อมกับ test database ผ่าน
 
-## 18. แผนย้ายข้อมูลจริงในอนาคต
+## 18. แผนย้ายข้อมูล Legacy ในอนาคต (ไม่ใช้กับการติดตั้งปัจจุบัน)
 
-ยังไม่ทำในช่วงแรก
+สถานะปัจจุบันไม่มีข้อมูล production จาก MySQL ให้ย้าย จึงไม่ต้องทำขั้นตอนนี้ตอนติดตั้งเครื่องบริษัท
 
-เมื่อระบบ PostgreSQL ผ่าน test data และ UAT แล้ว ค่อยวางแผนย้ายข้อมูลจริงแยกต่างหาก
+เก็บหัวข้อนี้ไว้เฉพาะกรณีอนาคตมีข้อมูล legacy ที่ IT ยืนยันว่าต้องนำเข้า โดยต้องวางแผนและอนุมัติใหม่แยกต่างหาก
 
 แนวทางในอนาคต:
 
@@ -551,28 +542,29 @@ Checklist:
 - audit trail
 - completed snapshot
 
-## 19. Cutover และ Rollback Plan
+## 19. Clean Installation และ Rollback Plan
 
-Cutover คือการเปลี่ยนระบบใช้งานจริงจาก MySQL เดิมไป PostgreSQL
+การเปิดใช้งานครั้งแรกคือสร้าง PostgreSQL ใหม่ที่สะอาดบนเครื่องบริษัท ไม่ใช่การสลับจากฐาน MySQL production
 
 หลักการ:
 
 - ทำหลัง UAT ผ่านเท่านั้น
-- มี backup ก่อน cutover
-- มีเวลาหยุดระบบที่ผู้ใช้รับทราบ
+- ใช้ฐาน `brakecheck_pg` ใหม่และ schema 14 ตาราง
+- สร้าง `.env`, PostgreSQL role และ Admin ใหม่สำหรับบริษัท
+- ตั้ง backup ก่อนเริ่มบันทึกข้อมูลจริง
 - มีคนรับผิดชอบชัดเจน
-- มี rollback path กลับไปใช้ MySQL เดิม
+- ยังไม่นำข้อมูลจริงเข้าจนกว่า Go-live checklist ผ่าน
 
 Rollback ที่เสนอ:
 
-- ถ้า PostgreSQL ยังไม่ผ่าน UAT ให้ใช้ MySQL เดิมต่อ
-- ถ้า cutover แล้วพบปัญหารุนแรง ให้หยุดใช้งาน PostgreSQL และกลับไปเปิดระบบ MySQL เดิม
-- ห้าม sync ข้อมูลกลับไป MySQL แบบ manual ถ้าไม่มีแผนชัดเจน เพราะอาจทำให้ข้อมูลไม่ตรงกัน
+- ถ้ายังไม่เริ่มข้อมูลจริง ให้หยุดติดตั้ง แก้ package/config แล้วสร้างฐานใหม่ที่สะอาด
+- ถ้าเริ่มข้อมูลจริงแล้ว ให้หยุดใช้งานชั่วคราวและกู้จาก PostgreSQL full backup ตามคู่มือ
+- ไม่มี MySQL production ให้ fallback และห้ามสร้างการ sync กลับ MySQL
 
 ข้อห้าม:
 
 - ไม่ dual-write
-- ไม่ลบ MySQL เดิม
+- ไม่ใช้ฐานทดสอบจากเครื่องที่บ้านเป็นฐานจริง
 - ไม่ลบ backup
 - ไม่แก้ข้อมูลจริงโดยไม่อนุมัติ
 
@@ -782,35 +774,35 @@ Rollback ที่เสนอ:
 | Cost/License | ไม่มี |
 | Approval gate | ต้องผู้ใช้/IT sign off |
 
-### Phase 9: ทดลอง Migration ด้วย Test Data
+### Phase 9: ทดสอบ PostgreSQL ด้วย Test Data
 
 | รายการ | รายละเอียด |
 | --- | --- |
-| เป้าหมาย | ซ้อมย้ายข้อมูลโดยไม่ใช้ข้อมูลจริง |
-| ไฟล์ที่จะเปลี่ยน | อาจมี script migration test เฉพาะหลังอนุมัติ |
+| เป้าหมาย | ทดสอบ PostgreSQL ใหม่ด้วยข้อมูลจำลอง โดยไม่เชื่อมต่อ MySQL |
+| ไฟล์ที่จะเปลี่ยน | tests/docs หรือโค้ดแก้บั๊กที่พบจาก UAT |
 | Database impact | เขียน test data |
 | ความเสี่ยง | กลาง |
 | ต้อง backup หรือไม่ | backup test DB ถ้าต้องเทียบผล |
-| วิธีทดสอบ | compare count/key/audit/snapshot |
+| วิธีทดสอบ | workflow, count/key/audit/snapshot, export และ backup/restore |
 | เงื่อนไขผ่าน | test data ใช้งานครบ workflow |
 | Rollback | recreate test DB |
 | Cost/License | ไม่มี |
-| Approval gate | ต้องอนุมัติก่อนใช้ข้อมูลจริง |
+| Approval gate | ผ่านการทดสอบที่บ้านแล้ว; ยังต้อง UAT ที่บริษัทก่อนใช้ข้อมูลจริง |
 
-### Phase 10: วางแผน Production Cutover
+### Phase 10: เตรียมติดตั้งใหม่บนเครื่องบริษัท
 
 | รายการ | รายละเอียด |
 | --- | --- |
-| เป้าหมาย | เตรียมเปลี่ยนระบบจริงอย่างควบคุมได้ |
-| ไฟล์ที่จะเปลี่ยน | cutover checklist/docs |
-| Database impact | ยังไม่เขียนจริงจนกว่าจะ cutover |
+| เป้าหมาย | เตรียมชุดโปรแกรมและ PostgreSQL ใหม่ที่สะอาดสำหรับเครื่องบริษัท |
+| ไฟล์ที่จะเปลี่ยน | deployment/go-live checklist/docs และชุดติดตั้งบนแฟลชไดรฟ์ |
+| Database impact | ไม่แก้ฐานทดสอบที่บ้าน; สร้างฐานใหม่บนเครื่องบริษัทตอนติดตั้ง |
 | ความเสี่ยง | สูง |
-| ต้อง backup หรือไม่ | ต้อง backup MySQL เดิมและ PostgreSQL ก่อน cutover |
-| วิธีทดสอบ | dry run checklist |
-| เงื่อนไขผ่าน | ผู้ใช้/IT อนุมัติเวลาและ rollback |
-| Rollback | กลับไป MySQL เดิม |
+| ต้อง backup หรือไม่ | ไม่มีข้อมูล production เดิมให้ย้าย; หลังเริ่มใช้งานต้องตั้ง PostgreSQL backup |
+| วิธีทดสอบ | checksum ชุดติดตั้ง, clean schema, install/go-live checklist |
+| เงื่อนไขผ่าน | IT ติดตั้งและผู้ใช้ UAT บนเครื่องบริษัทผ่าน |
+| Rollback | หยุดเปิดใช้งาน แก้ชุดติดตั้ง แล้วสร้างฐานใหม่ก่อนมีข้อมูลจริง |
 | Cost/License | ไม่มี |
-| Approval gate | ต้องมี explicit go-live approval |
+| Approval gate | ต้องมี explicit go-live approval จากผู้ใช้และ IT |
 
 ### Phase 11: อัปเดต Final IT System Report หลังระบบเสร็จ
 
@@ -827,15 +819,8 @@ Rollback ที่เสนอ:
 | Cost/License | ไม่มี |
 | Approval gate | ทำหลัง implementation ผ่าน |
 
+สถานะ Phase 11: ตรวจและปรับเอกสารเสร็จเมื่อ 2026-07-28 โดยไม่มีการแก้ code หรือ database
+
 ## คำแนะนำลำดับถัดไป
 
-หลังผู้ใช้/IT ตรวจเอกสารนี้แล้ว ขั้นถัดไปที่ปลอดภัยที่สุดคือ Phase 1 แบบ docs/config-example only:
-
-- ปรับ `README.md`
-- ปรับ `AGENTS.md`
-- ปรับ `.env.example`
-- ยังไม่ติดตั้ง `pg`
-- ยังไม่แก้ connection
-- ยังไม่สร้าง table
-
-หากต้องเริ่ม Phase 2 ต้องขออนุมัติ dependency `pg` แยกอีกครั้งก่อนติดตั้ง
+หลัง Phase 11 ผ่าน ขั้นถัดไปคือให้ IT ตรวจชุดติดตั้งบนแฟลชไดรฟ์ ติดตั้ง PostgreSQL 17 และ BrakeCheck บนเครื่องบริษัท แล้วทำ Go-live/UAT ก่อนเริ่มบันทึกข้อมูลจริง

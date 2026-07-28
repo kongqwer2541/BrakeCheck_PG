@@ -35,10 +35,10 @@ npm start
 
 ให้ตรวจ:
 
-- MySQL เปิดอยู่หรือไม่
-- database `brakecheck` มีอยู่หรือยัง
+- PostgreSQL 17 เปิดอยู่หรือไม่
+- database `brakecheck_pg` มีอยู่หรือยัง
 - ค่า `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` ใน `.env` ถูกต้องหรือไม่
-- user ของ MySQL มีสิทธิ์เข้าฐานข้อมูลหรือไม่
+- role `brakecheck_app` มีสิทธิ์เข้าฐานข้อมูลหรือไม่
 
 ห้าม reset database ถ้ายังไม่แน่ใจว่าเป็นฐานข้อมูลทดสอบหรือฐานข้อมูลจริง
 
